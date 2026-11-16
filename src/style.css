@@ -1,0 +1,2438 @@
+* {
+  box-sizing: border-box;
+}
+
+/* The game has one look, its light one. Without this, a page shown in dark mode
+   (as the shared page can be) draws any button without its own text color in white. */
+:root {
+  color-scheme: light !important;
+}
+
+button {
+  color: #3d3226;
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  font-family: 'Comic Sans MS', 'Trebuchet MS', system-ui, sans-serif;
+}
+
+#app {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+}
+
+#scene-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Everything along the bottom: the pawn bar fills the width, and the tool panels sit on top of it however many rows it wraps to. */
+#bottom-dock {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  z-index: 5;
+  /* The gaps between panels belong to the canvas, so a click there still lands on the lot. */
+  pointer-events: none;
+}
+
+#left-stack {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+#bottom-dock .panel {
+  pointer-events: auto;
+}
+
+#left-stack .panel {
+  position: static;
+}
+
+.build-dock {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.build-dock .panel {
+  position: static;
+}
+
+.panel.rail {
+  align-items: stretch;
+  width: 168px;
+  flex-shrink: 0;
+}
+
+.rail-mode-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rail-mode-row .mode-tab {
+  min-width: 0;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.rail-mode-row .mode-tab .emoji {
+  font-size: 16px;
+}
+
+.rail-history-row {
+  display: flex;
+  gap: 6px;
+}
+
+button.history-btn {
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
+  padding: 6px 4px;
+}
+
+button.history-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: #fff8ea;
+}
+
+/* Delete, Undo and Redo, in their own panel between the mode tabs and the shelf. */
+.panel.edit-panel {
+  align-items: stretch;
+  width: 150px;
+  flex-shrink: 0;
+}
+
+button.rail-tool-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 3px solid #d8c9a3;
+  border-radius: 14px;
+  background: #fff8ea;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  color: #5b4a30;
+  text-align: left;
+  transition: transform 0.08s ease, background 0.15s ease;
+}
+
+button.rail-tool-btn .emoji {
+  font-size: 20px;
+}
+
+button.rail-tool-btn:hover {
+  transform: translateX(3px);
+  background: #ffefc7;
+}
+
+button.rail-tool-btn.active {
+  background: #ffd873;
+  border-color: #e0a52a;
+}
+
+button.rail-tool-btn.delete-btn {
+  border-color: #e0a0a0;
+  background: #fff0f0;
+}
+
+button.rail-tool-btn.delete-btn:hover {
+  background: #ffe0e0;
+}
+
+button.rail-tool-btn.delete-btn.active {
+  background: #ff8a8a;
+  border-color: #d14545;
+  color: #fff8ea;
+}
+
+.panel.shelf {
+  align-items: stretch;
+  /* The panels beside it and the screen's edge, so a long row stops short of running off the screen. */
+  max-width: calc(100vw - 540px);
+}
+
+.panel.shelf .toolbar-row {
+  max-width: 396px;
+}
+
+/* The furniture rows wrap onto more lines rather than scrolling sideways. A tab with a lot in it scrolls up and down instead of covering the house. */
+.panel.shelf .furniture-category-row,
+.panel.shelf .furniture-row {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  max-width: none;
+}
+
+/* Build's own tools stay on one line, only wrapping if the screen is too narrow for them. */
+.panel.shelf .build-tool-row {
+  max-width: none;
+}
+
+.panel.shelf .furniture-row {
+  max-height: 34vh;
+  overflow-y: auto;
+}
+
+.furniture-category-row > button,
+.furniture-row > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.panel {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 8px 12px;
+  border-radius: 16px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+
+#right-rail {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  z-index: 5;
+}
+
+#right-rail .panel {
+  position: static;
+}
+
+/* The file menu: Save, Load and Reset, up in the top left in every mode. */
+#file-controls {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 6;
+}
+
+#file-controls .overflow-menu {
+  right: auto;
+  left: 0;
+}
+
+/* The 📁 menu: this house, your other houses, and starting a new one. */
+.houses-menu {
+  width: 290px;
+  max-height: calc(100vh - 90px);
+  overflow-y: auto;
+  white-space: normal;
+}
+
+.houses-heading {
+  padding: 8px 10px 2px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #a08a62;
+}
+
+.houses-heading:not(:first-child) {
+  margin-top: 4px;
+  border-top: 2px dashed #e6d9b8;
+}
+
+.houses-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.house-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 8px;
+}
+
+.house-row.current {
+  background: #ffefc7;
+}
+
+.house-row-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  color: #5b4a30;
+}
+
+button.house-row-main {
+  cursor: pointer;
+}
+
+button.house-row-main:hover {
+  background: #ffefc7;
+}
+
+.house-name {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.house-details {
+  font-size: 11px;
+  color: #8a7552;
+}
+
+.house-unsaved {
+  padding: 4px 10px 6px;
+}
+
+.house-name-input {
+  width: 100%;
+  padding: 3px 6px;
+  border: 2px solid #e0a43a;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: #5b4a30;
+}
+
+.house-actions {
+  display: flex;
+  gap: 2px;
+  padding-right: 4px;
+}
+
+button.house-icon-btn {
+  padding: 4px 6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.house-row:hover button.house-icon-btn,
+button.house-icon-btn:focus-visible {
+  opacity: 1;
+}
+
+button.house-icon-btn:hover {
+  background: #f6e3b4;
+}
+
+button.house-icon-btn.confirm-delete {
+  opacity: 1;
+  background: #ffdcd6;
+  color: #a33a2e;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.houses-menu button.overflow-menu-item {
+  white-space: normal;
+}
+
+/* "Saved", or what went wrong, beside the folder button. */
+.save-message {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 10px);
+  transform: translate(-6px, -50%);
+  padding: 6px 12px;
+  border: 3px solid #b9d98a;
+  border-radius: 12px;
+  background: #f4fbe8;
+  color: #4a6a1f;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.save-message.shown {
+  opacity: 1;
+  transform: translate(0, -50%);
+}
+
+.save-message.error {
+  width: max-content;
+  max-width: min(360px, calc(100vw - 90px));
+  white-space: normal;
+  border-color: #e8a29a;
+  background: #fff0ee;
+  color: #a33a2e;
+}
+
+.view-mode-stack {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  gap: 6px;
+}
+
+.view-cross {
+  display: grid;
+  grid-template-columns: repeat(3, 34px);
+  grid-template-rows: repeat(3, 34px);
+  gap: 4px;
+  justify-items: center;
+  align-items: center;
+}
+
+/* Up a floor, which floor you're on, down a floor. */
+.level-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.level-label {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  white-space: nowrap;
+  color: #5b4a30;
+}
+
+button.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+button.icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 10px;
+  border: 2px solid #d8c9a3;
+  background: #fff8ea;
+  cursor: pointer;
+  font-size: 16px;
+  transition: transform 0.08s ease, background 0.15s ease;
+}
+
+button.icon-btn:hover {
+  background: #ffefc7;
+  transform: translateY(-1px);
+}
+
+.overflow-wrap {
+  position: relative;
+}
+
+.overflow-menu {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  background: #fff8ea;
+  border: 3px solid #d8c9a3;
+  border-radius: 12px;
+  padding: 6px;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.25);
+  white-space: nowrap;
+  z-index: 10;
+}
+
+.overflow-menu.open {
+  display: flex;
+}
+
+button.overflow-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  color: #5b4a30;
+  text-align: left;
+}
+
+button.overflow-menu-item:hover {
+  background: #ffefc7;
+}
+
+button.overflow-menu-item .emoji {
+  font-size: 16px;
+}
+
+button.mode-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 110px;
+  padding: 10px 16px;
+  border: 3px solid #c9a25a;
+  border-radius: 16px;
+  background: #fff3d6;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 800;
+  color: #5b4a30;
+  justify-content: center;
+}
+
+button.mode-tab .emoji {
+  font-size: 20px;
+}
+
+button.mode-tab:hover {
+  transform: translateY(-2px);
+}
+
+button.mode-tab.active {
+  background: #e0a52a;
+  color: #fff8ea;
+  border-color: #b9821c;
+}
+
+.toolbar-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.furniture-category-row {
+  gap: 4px;
+  border-bottom: 2px dashed #e0d2ab;
+  padding-bottom: 6px;
+}
+
+button.furniture-category-btn {
+  padding: 4px 8px;
+  border: 2px solid #d8c9a3;
+  border-radius: 10px;
+  background: #fff8ea;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  color: #5b4a30;
+  white-space: nowrap;
+}
+
+button.furniture-category-btn:hover {
+  background: #ffefc7;
+}
+
+button.furniture-category-btn.active {
+  background: #ffd873;
+  border-color: #e0a52a;
+}
+
+button.furniture-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 64px;
+  padding: 8px 6px;
+  border: 3px solid #d8c9a3;
+  border-radius: 14px;
+  background: #fff8ea;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  color: #5b4a30;
+  transition: transform 0.08s ease, background 0.15s ease;
+}
+
+button.furniture-btn .emoji {
+  font-size: 22px;
+}
+
+button.furniture-btn:hover {
+  transform: translateY(-2px);
+  background: #ffefc7;
+}
+
+button.furniture-btn.active {
+  background: #ffd873;
+  border-color: #e0a52a;
+}
+
+/* While deleting in Furnish mode, the piece you'd place is still marked, just quietly. */
+.furniture-row.dimmed button.furniture-btn.active {
+  background: #fff3cf;
+  border-color: #ecd08a;
+}
+
+.paint-row {
+  border-top: 2px dashed #e0d2ab;
+  padding-top: 8px;
+}
+
+button.submode-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 2px solid #d8c9a3;
+  border-radius: 12px;
+  background: #fff8ea;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  color: #5b4a30;
+}
+
+button.submode-btn .emoji {
+  font-size: 16px;
+}
+
+button.submode-btn:hover {
+  background: #ffefc7;
+}
+
+button.submode-btn.active {
+  background: #ffd873;
+  border-color: #e0a52a;
+}
+
+button.paint-swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 3px solid #d8c9a3;
+  cursor: pointer;
+  padding: 0;
+}
+
+button.paint-swatch:hover {
+  transform: translateY(-2px);
+}
+
+button.paint-swatch.active {
+  border-color: #5b4a30;
+  box-shadow: 0 0 0 2px #ffd873;
+}
+
+input.paint-picker {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 3px solid #d8c9a3;
+  padding: 0;
+  cursor: pointer;
+  background: none;
+}
+
+#bottom-dock .panel.pawn-panel {
+  position: relative;
+  align-items: stretch;
+  align-self: stretch;
+}
+
+/* Editing belongs to Live mode. Everywhere else, the bar is only for choosing a pawn. */
+.pawn-panel.read-only .pawn-edit-btn,
+.pawn-panel.read-only .pawn-add-btn {
+  display: none;
+}
+
+.pawn-panel.read-only .pawn-chip {
+  padding-right: 8px;
+}
+
+.pawn-count {
+  flex-shrink: 0;
+  align-self: center;
+  font-size: 12px;
+  font-weight: 800;
+  color: #5b4a30;
+  white-space: nowrap;
+}
+
+/* Chips fill a row and carry on in the next one, so however wide the screen is, nobody's hidden behind a scrollbar. */
+.pawn-list {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.pawn-chip {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 112px;
+  padding: 4px 4px 4px 8px;
+  border: 2px solid #d8c9a3;
+  border-radius: 12px;
+  background: #fff8ea;
+  cursor: pointer;
+  user-select: none;
+}
+
+.pawn-chip:hover {
+  background: #ffefc7;
+}
+
+.pawn-chip.active {
+  background: #ffd873;
+  border-color: #e0a52a;
+}
+
+.pawn-dot {
+  position: relative;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(91, 74, 48, 0.25);
+}
+
+/*
+ * Two little eyes, like the pawns' own, that blink now and then. Each chip blinks at its own moment.
+ * Sized the way a pawn's are against its body: each eye 12% of its width, their middles 35% apart.
+ */
+.pawn-dot::before,
+.pawn-dot::after {
+  content: '';
+  position: absolute;
+  top: 36%;
+  width: 12%;
+  height: 12%;
+  border-radius: 50%;
+  background: #2b2b2b;
+  animation: pawn-dot-blink 5s infinite;
+}
+
+.pawn-dot::before {
+  left: 26.5%;
+}
+
+.pawn-dot::after {
+  right: 26.5%;
+}
+
+.pawn-chip:nth-child(2n) .pawn-dot::before,
+.pawn-chip:nth-child(2n) .pawn-dot::after {
+  animation-delay: -1.7s;
+}
+
+.pawn-chip:nth-child(3n) .pawn-dot::before,
+.pawn-chip:nth-child(3n) .pawn-dot::after {
+  animation-delay: -3.1s;
+}
+
+@keyframes pawn-dot-blink {
+  0%,
+  94%,
+  100% {
+    transform: scaleY(1);
+  }
+  97% {
+    transform: scaleY(0.15);
+  }
+}
+
+.pawn-chip-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+  color: #5b4a30;
+}
+
+button.pawn-edit-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  padding: 0;
+  background: none;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+button.pawn-edit-btn:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+button.pawn-add-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border: 2px solid #d8c9a3;
+  border-radius: 50%;
+  padding: 0;
+  background: #fff8ea;
+  color: #5b4a30;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+}
+
+button.pawn-add-btn:hover {
+  background: #ffefc7;
+}
+
+.pawn-editor {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 270px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+
+.pawn-editor-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+input.pawn-color {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border: 2px solid #d8c9a3;
+  border-radius: 50%;
+  padding: 0;
+  cursor: pointer;
+  background: none;
+}
+
+input.pawn-color::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+input.pawn-color::-webkit-color-swatch {
+  border: none;
+  border-radius: 50%;
+}
+
+input.pawn-name {
+  flex: 1;
+  min-width: 0;
+  border: 2px solid #d8c9a3;
+  border-radius: 8px;
+  padding: 5px 8px;
+  background: #ffffff;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: #5b4a30;
+}
+
+.pawn-trait-row {
+  display: flex;
+  gap: 4px;
+}
+
+button.pawn-trait-btn {
+  flex: 1;
+  min-width: 0;
+  border: 2px solid #d8c9a3;
+  border-radius: 8px;
+  padding: 4px 2px;
+  background: #ffffff;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  color: #5b4a30;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+button.pawn-trait-btn:hover {
+  background: #ffefc7;
+}
+
+button.pawn-trait-btn.active {
+  background: #ffd873;
+  border-color: #e0a52a;
+}
+
+.panel.needs-panel {
+  align-items: stretch;
+  gap: 4px;
+  width: 200px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #5b4a30;
+}
+
+.needs-heading {
+  font-size: 14px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.needs-traits {
+  font-size: 11px;
+}
+
+.needs-mood {
+  margin-bottom: 4px;
+}
+
+.need-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.need-label {
+  flex-shrink: 0;
+  width: 78px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.need-bar {
+  flex: 1;
+  height: 9px;
+  border-radius: 5px;
+  background: #ebe2cc;
+  overflow: hidden;
+}
+
+.need-fill {
+  height: 100%;
+  border-radius: 5px;
+}
+
+.needs-relationships {
+  font-size: 11px;
+}
+
+.needs-relationships:empty {
+  display: none;
+}
+
+.pawn-editor-row button.submode-btn {
+  justify-content: center;
+}
+
+.pawn-editor-row button.pawn-editor-done {
+  flex: 1;
+  background: #ffd873;
+  border-color: #e0a52a;
+}
+
+button.pawn-editor-remove {
+  border: none;
+  padding: 0;
+  background: none;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  color: #b3402e;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+button.pawn-editor-remove:disabled {
+  color: #b5ab97;
+  text-decoration: none;
+  cursor: default;
+}
+
+.drag-size-tip {
+  position: fixed;
+  display: none;
+  pointer-events: none;
+  background: #4a3b22;
+  color: #fff8ea;
+  padding: 3px 9px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  transform: translate(14px, -50%);
+  z-index: 20;
+}
+
+.hint {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.85);
+  padding: 6px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #4a3b22;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+/* A button that lifts or slides on hover leaves an invisible strip where it just was, so a
+   cursor resting on its very edge stays on it, rather than the button moving out from under
+   the cursor, dropping back, and lifting again in a flicker. */
+button.mode-tab,
+button.furniture-btn,
+button.paint-swatch,
+button.icon-btn,
+button.rail-tool-btn {
+  position: relative;
+}
+
+button.mode-tab:hover::after,
+button.furniture-btn:hover::after,
+button.paint-swatch:hover::after,
+button.icon-btn:hover::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 4px;
+}
+
+/* Move and Delete slide right instead, so their strip is on the left. */
+button.rail-tool-btn:hover::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 100%;
+  width: 5px;
+}
+
+/* The menu search, along the top of Build and Furnish. */
+.search-row {
+  align-items: center;
+  gap: 4px;
+  justify-content: flex-start;
+}
+
+.panel.shelf .search-row {
+  max-width: none;
+}
+
+input.menu-search {
+  flex: 1;
+  min-width: 180px;
+  padding: 5px 10px;
+  border: 2px solid #d8c9a3;
+  border-radius: 10px;
+  background: #fffdf6;
+  font: inherit;
+  font-size: 13px;
+  color: #5b4a2e;
+  outline: none;
+}
+
+input.menu-search:focus {
+  border-color: #e0a93b;
+  background: #ffffff;
+}
+
+button.menu-search-clear {
+  width: 28px;
+  height: 28px;
+  border: 2px solid #d8c9a3;
+  border-radius: 8px;
+  background: #fff8ea;
+  color: #8a7350;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.menu-search-empty {
+  padding: 6px 4px;
+  color: #9a8662;
+  font-size: 13px;
+}
+
+
+/* --- Pie menu: a ring of choices around where you clicked, in Live. --- */
+.pie-menu {
+  position: fixed;
+  width: 0;
+  height: 0;
+  z-index: 40;
+}
+
+button.pie-center {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  border: 3px solid #c9a25a;
+  background: radial-gradient(circle at 35% 30%, #fffaf0, #f3e2b8);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.pie-emoji {
+  font-size: 28px;
+  line-height: 1;
+}
+
+/* The pawn's own face: its color, with eyes the way its body has them. */
+.pie-face {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid rgba(91, 74, 48, 0.25);
+}
+
+.pie-face::before,
+.pie-face::after {
+  content: '';
+  position: absolute;
+  top: 36%;
+  width: 12%;
+  height: 12%;
+  border-radius: 50%;
+  background: #2b2b2b;
+  animation: pawn-dot-blink 5s infinite;
+}
+
+.pie-face::before {
+  left: 26.5%;
+}
+
+.pie-face::after {
+  right: 26.5%;
+}
+
+.pie-caption {
+  position: absolute;
+  left: 0;
+  top: 40px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: rgba(255, 248, 234, 0.95);
+  color: #5b4a30;
+  font-size: 12px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.pie-caption.pie-why {
+  color: #b5483a;
+}
+
+button.pie-slot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px 5px 5px;
+  border: 2px solid #c9a25a;
+  border-radius: 999px;
+  background: #fff3d6;
+  color: #5b4a30;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.22);
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.4);
+  transition:
+    transform 0.16s ease-out,
+    opacity 0.16s ease-out;
+}
+
+button.pie-slot .emoji {
+  font-size: 15px;
+}
+
+/* The round bead on the end nearest the middle, which the choice hangs from. */
+.pie-bead {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff, #e0a93b);
+  border: 2px solid #c9a25a;
+  flex-shrink: 0;
+}
+
+button.pie-slot.pie-left {
+  flex-direction: row-reverse;
+  padding: 5px 5px 5px 12px;
+}
+
+button.pie-slot.pie-open {
+  opacity: 1;
+}
+
+button.pie-slot.pie-open.pie-middle {
+  transform: translate(calc(var(--x) - 50%), calc(var(--y) - 50%));
+}
+
+button.pie-slot.pie-open.pie-right {
+  transform: translate(calc(var(--x) - 12px), calc(var(--y) - 50%));
+}
+
+button.pie-slot.pie-open.pie-left {
+  transform: translate(calc(var(--x) - 100% + 12px), calc(var(--y) - 50%));
+}
+
+button.pie-slot:hover {
+  background: #ffe7a8;
+  border-color: #e0a93b;
+}
+
+button.pie-slot.pie-disabled {
+  background: #ece6da;
+  border-color: #c8bfae;
+  color: #a39883;
+  cursor: not-allowed;
+}
+
+button.pie-slot.pie-disabled .pie-bead {
+  background: #d6cfc2;
+  border-color: #c8bfae;
+}
+
+/* ============================================================================
+   Sandbox: the Classic | Band switch, and the ?ui=band layout.
+   Everything below is scoped to body.ui-band except the switch itself, so
+   ?ui=classic (or no ?ui) looks exactly as before.
+   ============================================================================ */
+
+.layout-switch {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  font-size: 11px;
+  font-weight: 800;
+  color: #9a8558;
+}
+
+.layout-switch > span {
+  padding: 0 6px;
+  letter-spacing: 1px;
+}
+
+.layout-switch a {
+  padding: 4px 10px;
+  border-radius: 9px;
+  color: #5b4a30;
+  text-decoration: none;
+}
+
+.layout-switch a:hover {
+  background: #ffefc7;
+}
+
+.layout-switch a.active {
+  background: #e0a52a;
+  color: #fff8ea;
+}
+
+/* The needs panel moves down out of the switch's way. */
+#right-rail {
+  top: 56px;
+}
+
+/* --- One row along the bottom: the anchor, then the band. --- */
+body.ui-band #bottom-dock {
+  flex-direction: row;
+  align-items: flex-end;
+}
+
+body.ui-band #left-stack {
+  flex: 1;
+  min-width: 0;
+  align-items: stretch;
+}
+
+/* The anchor: modes on top, then camera, floors and wall view, then houses. Same place and size in every mode. */
+body.ui-band .panel.anchor-panel {
+  position: static;
+  flex-shrink: 0;
+  width: 300px;
+  align-items: stretch;
+  gap: 8px;
+}
+
+/* Live, Furnish and Build: their own column, stacked just right of the anchor. */
+body.ui-band .panel.mode-column {
+  position: static;
+  flex-shrink: 0;
+  width: 76px;
+  padding: 8px 6px;
+}
+
+body.ui-band .mode-column .rail-mode-row {
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+body.ui-band .mode-column .rail-mode-row .mode-tab {
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 4px;
+  font-size: 12px;
+}
+
+body.ui-band #view-controls.view-panel {
+  position: static;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  justify-items: center;
+  gap: 6px 10px;
+  align-items: center;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+}
+
+/* Two halves. Left, top to bottom: the floor arrows, the camera, the 📁 and 👁️‍🗨️ menus. Right: the wall views. */
+body.ui-band .level-row {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+body.ui-band .view-cross {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+body.ui-band .anchor-utility-row {
+  grid-column: 1;
+  grid-row: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Roof, Full walls and See-through stacked down the right half, sharing its height. */
+body.ui-band .view-mode-stack {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  align-self: stretch;
+  justify-self: stretch;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 10px;
+  border-left: 2px dashed #e0d2ab;
+}
+
+body.ui-band .view-mode-stack button.submode-btn {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+body.ui-band #view-controls > button.submode-btn {
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0;
+  padding: 3px 2px;
+  font-size: 9.5px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+body.ui-band #view-controls > button.submode-btn .emoji {
+  font-size: 14px;
+}
+
+body.ui-band #file-controls {
+  position: static;
+}
+
+body.ui-band #file-controls.panel {
+  position: static;
+  align-items: flex-start;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+}
+
+/* Opens upward from the bottom of the screen, and "Saved" shows above the folder rather than over the band. */
+body.ui-band #file-controls .overflow-menu {
+  top: auto;
+  bottom: calc(100% + 8px);
+}
+
+body.ui-band #file-controls .save-message {
+  top: auto;
+  bottom: calc(100% + 6px);
+  left: 0;
+  transform: translateY(6px);
+}
+
+body.ui-band #file-controls .save-message.shown {
+  transform: translateY(0);
+}
+
+/* --- The band: one panel, contents swapped by mode. --- */
+body.ui-band .build-dock.band-dock {
+  flex: 1;
+  min-width: 0;
+  align-items: stretch;
+}
+
+body.ui-band .panel.shelf.band {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  max-height: 34vh;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* The mode, in words, on the band's edge. */
+.band-mode-label {
+  flex-shrink: 0;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  padding: 10px 5px;
+  border-radius: 0 16px 16px 0;
+  background: #e0a52a;
+  color: #fff8ea;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 3px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.band-section {
+  scrollbar-width: thin;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-left: 2px dashed #e0d2ab;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.band-mode-label + .band-section {
+  border-left: none;
+}
+
+.band-section-heading,
+.tool-group-label,
+.option-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #9a8558;
+}
+
+/* Move, Delete, Undo and Redo: the tool strip right beside the anchor. */
+body.ui-band .band-section.tool-strip {
+  flex-shrink: 0;
+  width: 84px;
+  justify-content: flex-start;
+  padding: 8px 6px;
+}
+
+body.ui-band .tool-strip button.rail-tool-btn {
+  flex-direction: column;
+  gap: 0;
+  padding: 4px 2px;
+  font-size: 11px;
+}
+
+body.ui-band .tool-strip button.rail-tool-btn .emoji {
+  font-size: 18px;
+}
+
+body.ui-band .tool-strip button.rail-tool-btn:hover {
+  transform: none;
+}
+
+body.ui-band .tool-strip button.history-btn {
+  flex-direction: column;
+  gap: 0;
+  padding: 3px 2px;
+  font-size: 10px;
+}
+
+/* Live: the slot itself steps aside, so the Sim panel's columns (simPanel.ts)
+   sit straight in the band. Their styles are in the Live block at the end. */
+body.ui-band .household-slot {
+  display: contents;
+}
+
+/* Build and Furnish: the catalog. */
+.catalog-section {
+  flex: 1 1 0;
+}
+
+body.ui-band .panel.shelf .toolbar-row {
+  max-width: none;
+}
+
+body.ui-band .panel.shelf .furniture-row {
+  max-height: none;
+  overflow: visible;
+}
+
+body.ui-band .build-tool-row {
+  justify-content: flex-start;
+  gap: 14px;
+}
+
+.tool-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tool-group-tiles {
+  display: flex;
+  gap: 6px;
+}
+
+body.ui-band .panel.shelf.band button.furniture-btn {
+  min-width: 54px;
+  padding: 5px 3px;
+  font-size: 11px;
+}
+
+body.ui-band .panel.shelf.band button.furniture-btn .emoji {
+  font-size: 20px;
+}
+
+/* The active tool's settings, under its name. */
+.settings-section {
+  flex: 0 0 390px;
+}
+
+.settings-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding-bottom: 2px;
+  border-bottom: 3px solid #3a86c8;
+  font-size: 14px;
+  font-weight: 800;
+  color: #1f4f7a;
+}
+
+body.ui-band .settings-section .toolbar-row {
+  justify-content: flex-start;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Each set of options is named at the start of its line. */
+.option-label {
+  flex-shrink: 0;
+  width: 54px;
+  line-height: 1.1;
+}
+
+/* Ends a line inside one row, so the Fence tool's fences, railings and gate each get a line of their own. */
+.option-break {
+  flex-basis: 100%;
+  height: 0;
+}
+
+body.ui-band .settings-section button.submode-btn {
+  gap: 3px;
+  padding: 4px 5px;
+  font-size: 11px;
+}
+
+body.ui-band .settings-section button.submode-btn .emoji {
+  font-size: 14px;
+}
+
+body.ui-band .settings-section .paint-row {
+  border-top: none;
+  padding-top: 0;
+}
+
+body.ui-band .settings-section button.paint-swatch,
+body.ui-band .settings-section input.paint-picker {
+  width: 28px;
+  height: 28px;
+}
+
+/* The tip, at the band's end instead of over the lot. */
+.inspector-slot {
+  flex: 0 0 180px;
+}
+
+body.ui-band .inspector-slot .hint {
+  position: static;
+  transform: none;
+  padding: 0;
+  background: none;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+/* --- Three selections, three cues: the mode is filled, the tool or pawn in hand gets a blue ring, and a tab gets an underline. --- */
+body.ui-band button.furniture-btn.active,
+body.ui-band button.rail-tool-btn.active,
+body.ui-band .pawn-chip.active {
+  background: #fff8ea;
+  border-color: #3a86c8;
+  box-shadow: 0 0 0 2px #3a86c8;
+  color: #1f4f7a;
+}
+
+body.ui-band button.rail-tool-btn.delete-btn.active {
+  background: #fff0f0;
+  border-color: #d14545;
+  box-shadow: 0 0 0 2px #d14545;
+  color: #b3402e;
+}
+
+body.ui-band .furniture-row.dimmed button.furniture-btn.active {
+  box-shadow: none;
+  border-color: #9cc3e6;
+}
+
+/* Furnish's category tiles: laid out like Build's tool groups, wrapping when the column is narrow. */
+body.ui-band .panel.shelf .furniture-category-row {
+  gap: 14px;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+body.ui-band .furniture-category-row .tool-group-tiles {
+  flex-wrap: wrap;
+}
+
+/* Furnish: categories on the left, the picked category's pieces on the right,
+   which gets the larger share since it holds the most buttons. */
+body.ui-band .panel.shelf.band[data-mode="furnish"] .settings-section {
+  flex: 1 1 0;
+  min-width: 260px;
+}
+
+body.ui-band .settings-section .furniture-row {
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+
+/* The pieces in the right-hand column (Furnish's, and Build's Outdoor ones):
+   inline, emoji beside the name, like the tool options in that column. */
+body.ui-band .settings-section .furniture-row button.furniture-btn,
+body.ui-band .settings-section .outdoor-row button.furniture-btn {
+  flex-direction: row;
+  gap: 3px;
+  min-width: 0;
+  padding: 4px 7px;
+  border-width: 2px;
+  border-radius: 12px;
+  font-size: 11px;
+}
+
+body.ui-band .settings-section .furniture-row button.furniture-btn .emoji,
+body.ui-band .settings-section .outdoor-row button.furniture-btn .emoji {
+  font-size: 14px;
+}
+
+body.ui-band .settings-section .furniture-row button.furniture-btn:hover,
+body.ui-band .settings-section .outdoor-row button.furniture-btn:hover {
+  transform: none;
+}
+
+/* --- Less room: drop a column rather than shrink text. The tip goes back above the lot. --- */
+/* The tip floats in the upper middle of the screen, over the lot, at every width. */
+body.ui-band .inspector-slot {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(560px, calc(100vw - 260px));
+  padding: 6px 14px;
+  border: none;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.85);
+  overflow: visible;
+  pointer-events: none;
+}
+
+body.ui-band .inspector-slot .band-section-heading {
+  display: none;
+}
+
+/* Narrower still: the settings column gives way before anything shrinks its text. */
+@media (max-width: 1100px) {
+  body.ui-band .settings-section {
+    flex: 0 1 390px;
+  }
+
+  body.ui-band .catalog-section {
+    min-width: 200px;
+  }
+}
+
+/* --- Shortcuts from The Sims 2 (all layouts) --- */
+
+/* P: the household is paused. */
+.paused-badge {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 20;
+  padding: 6px 12px;
+  border: 2px solid #e0a52a;
+  border-radius: 10px;
+  background: #fff8ea;
+  color: #5b4a30;
+  font-size: 13px;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+/* F10: nothing but the house (and the pause badge, so a frozen household isn't a mystery). */
+body.ui-hidden #app > :not(canvas, .paused-badge, .drag-size-tip) {
+  display: none !important;
+}
+
+/* ============================================================================
+   Live, as the UI doc's "Live: same band, labeled depth" page lays it out
+   (?ui=band only). The household stands on the anchor as a column of faces,
+   the selected one named. The band reads left to right from who to what:
+   Identity, Wants and Fears, a labeled tab row, a labeled sub-view selector,
+   and a detail area that scrolls inside itself. Inspectors open above the band.
+   ============================================================================ */
+
+body.ui-band .panel.anchor-panel {
+  position: relative;
+}
+
+body.ui-band #bottom-dock .panel.pawn-panel.household-column {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 12px);
+  align-self: auto;
+  padding: 6px;
+  border-radius: 23px;
+}
+
+/* One column of faces; a big household carries on in a second column rather than running off the top. */
+body.ui-band .household-column .pawn-list {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(auto-fit, 30px);
+  grid-auto-columns: 30px;
+  justify-items: start;
+  align-items: center;
+  gap: 5px;
+  max-height: calc(100vh - 320px);
+}
+
+body.ui-band .household-column .pawn-count {
+  width: 30px;
+  font-size: 10px;
+  line-height: 1.1;
+  text-align: center;
+  white-space: normal;
+}
+
+body.ui-band .household-column .pawn-chip {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  justify-content: center;
+  gap: 6px;
+  padding: 0;
+  border-radius: 15px;
+  background: #fff8ea;
+}
+
+body.ui-band .household-column .pawn-dot {
+  width: 22px;
+  height: 22px;
+}
+
+body.ui-band .household-column button.pawn-add-btn {
+  width: 30px;
+  height: 30px;
+  font-size: 16px;
+}
+
+body.ui-band .household-column .pawn-chip-name,
+body.ui-band .household-column .pawn-edit-btn {
+  display: none;
+}
+
+/* The selected pawn: its face, its name and its pencil, sticking out beside the column like a tag. */
+body.ui-band .household-column .pawn-chip.active {
+  z-index: 2;
+  width: max-content;
+  justify-content: flex-start;
+  padding: 0 2px 0 2px;
+}
+
+body.ui-band .household-column .pawn-chip.active .pawn-chip-name {
+  display: block;
+  max-width: 150px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+body.ui-band .household-column .pawn-chip.active .pawn-edit-btn {
+  display: block;
+}
+
+/* The editor opens beside the column, rather than above it, where there's no room. */
+body.ui-band .household-column .pawn-editor {
+  left: calc(100% + 12px) !important;
+  bottom: 0 !important;
+}
+
+/* --- 1 · Identity --- */
+.sim-identity {
+  flex: 0 0 150px;
+  align-items: center;
+  text-align: center;
+}
+
+body.ui-band .band-section.sim-identity {
+  border-left: none;
+}
+
+.sim-identity .band-section-heading {
+  align-self: flex-start;
+}
+
+.sim-portrait-wrap {
+  position: relative;
+}
+
+.pawn-dot.sim-portrait {
+  width: 56px;
+  height: 56px;
+  border-width: 3px;
+  box-shadow: 0 0 0 3px #3a86c8;
+}
+
+.sim-mood-badge {
+  position: absolute;
+  right: -10px;
+  bottom: -6px;
+  font-size: 20px;
+}
+
+.sim-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 900;
+  color: #1f4f7a;
+}
+
+.sim-mood {
+  font-size: 12px;
+  font-weight: 700;
+  color: #5b4a30;
+}
+
+.sim-traits {
+  font-size: 11px;
+  line-height: 1.3;
+  color: #7a6a4c;
+}
+
+/* --- 2 · Wants over Fears, whichever tab is open --- */
+.sim-motivation {
+  flex: 0 0 auto;
+}
+
+.sim-slots {
+  display: grid;
+  grid-template-columns: repeat(4, 64px);
+  gap: 6px;
+}
+
+.sim-slots.fears {
+  grid-template-columns: repeat(3, 64px);
+}
+
+.sim-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 46px;
+  padding: 2px;
+  border: 2px solid #d8c9a3;
+  border-radius: 10px;
+  background: #fff8ea;
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  color: #5b4a30;
+}
+
+.sim-slot .emoji {
+  font-size: 18px;
+  line-height: 1.1;
+}
+
+.sim-slot-word {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sim-slot.empty {
+  border-style: dashed;
+  border-color: #e9dfc4;
+  background: none;
+}
+
+.sim-slots.fears .sim-slot:not(.empty) {
+  border-color: #e7a99e;
+  background: #fff0ed;
+}
+
+/* --- 3 · Tabs, 4 · sub-views, 5 · detail --- */
+.sim-detail-section {
+  flex: 1 1 0;
+  min-width: 320px;
+  overflow: hidden;
+}
+
+.sim-tab-row {
+  display: flex;
+  flex-shrink: 0;
+  gap: 2px;
+  border-bottom: 2px solid #efe4c8;
+}
+
+/* A tab gets an underline, not a fill: fills are for the mode, blue rings for the pawn in hand. */
+button.sim-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: -2px;
+  padding: 4px 10px 5px;
+  border: none;
+  border-bottom: 3px solid transparent;
+  border-radius: 8px 8px 0 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  color: #9a8558;
+  cursor: pointer;
+}
+
+button.sim-tab:hover {
+  background: #fff3d6;
+  color: #5b4a30;
+}
+
+button.sim-tab.active {
+  border-bottom-color: #5b4a30;
+  color: #5b4a30;
+}
+
+.sim-subview-row {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+}
+
+.sim-subview-row .option-label {
+  margin-right: 4px;
+}
+
+button.sim-subview {
+  padding: 2px 8px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  color: #9a8558;
+  cursor: pointer;
+}
+
+button.sim-subview:hover {
+  background: #fff3d6;
+}
+
+button.sim-subview.active {
+  color: #5b4a30;
+  text-decoration: underline 2px;
+  text-underline-offset: 4px;
+}
+
+/* Bounded: the band doesn't grow with a big household; the detail scrolls instead. */
+.sim-detail {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* Its own content never sets the band's height: Identity and Wants do, and this fills what's left. */
+  contain: size;
+  padding-right: 4px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+/* Needs: the mood meter at the left, then the bars in two columns. */
+.sim-needs {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.sim-mood-meter-wrap {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 3px;
+}
+
+.sim-mood-meter-emoji {
+  font-size: 18px;
+}
+
+.sim-mood-meter {
+  position: relative;
+  flex: 1;
+  width: 14px;
+  min-height: 54px;
+  border-radius: 7px;
+  background: #ebe2cc;
+  overflow: hidden;
+}
+
+.sim-mood-meter-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 7px;
+}
+
+.sim-mood-meter-label {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #9a8558;
+}
+
+.sim-need-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-content: start;
+  gap: 2px 14px;
+}
+
+button.sim-need-row {
+  display: grid;
+  grid-template-columns: 108px 1fr;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  color: #5b4a30;
+  cursor: pointer;
+}
+
+button.sim-need-row:hover,
+button.sim-need-row.inspecting {
+  background: #fff3d6;
+}
+
+.sim-need-row .need-bar {
+  display: block;
+}
+
+/* Relationships: a face, a name and a score bar for everyone else, best first. */
+.sim-relationships {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+  gap: 6px;
+}
+
+.sim-relationship {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  align-items: center;
+  gap: 3px 6px;
+  padding: 4px 6px;
+  border: 2px solid #efe4c8;
+  border-radius: 10px;
+  background: #fffdf7;
+}
+
+.pawn-dot.sim-relationship-face {
+  grid-row: 1 / span 2;
+  width: 22px;
+  height: 22px;
+}
+
+.sim-relationship-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 700;
+  color: #5b4a30;
+}
+
+.sim-score-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: #ebe2cc;
+}
+
+.sim-score-bar::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: 50%;
+  width: 1px;
+  background: #b5ab97;
+}
+
+.sim-score-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 3px;
+}
+
+.sim-empty {
+  padding: 4px 0;
+  font-size: 12px;
+  color: #9a8558;
+}
+
+/* Personality: each trait as a scale with the pawn's place on it marked. */
+.sim-personality {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sim-trait-scale {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.sim-trait-track {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: #f3ead3;
+}
+
+.sim-trait-stop {
+  padding: 3px 4px;
+  border-radius: 999px;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  color: #b5ab97;
+}
+
+.sim-trait-stop.active {
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  color: #5b4a30;
+}
+
+/* --- 6 · The inspector: above the band, beside what opened it, never over the anchor. --- */
+.sim-inspector {
+  position: fixed;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 280px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+  color: #5b4a30;
+}
+
+.sim-inspector-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sim-inspector-title {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.sim-inspector-value {
+  font-size: 12px;
+  font-weight: 800;
+  color: #9a8558;
+}
+
+button.sim-inspector-close {
+  padding: 2px 6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  font-size: 13px;
+  color: #9a8558;
+  cursor: pointer;
+}
+
+button.sim-inspector-close:hover {
+  background: #fff3d6;
+}
+
+.sim-inspector-line {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.sim-inspector-pieces {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.sim-inspector-piece {
+  padding: 2px 8px;
+  border: 1px solid #e0d2ab;
+  border-radius: 999px;
+  background: #fff3d6;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sim-inspector .option-label,
+.sim-subview-row .option-label {
+  width: auto;
+}
+
+/* The 👁️‍🗨️ special views menu: opens upward like the 📁 one, and lights up while a special view is on. */
+body.ui-band .special-views .overflow-menu {
+  top: auto;
+  right: auto;
+  bottom: calc(100% + 8px);
+  left: 0;
+}
+
+body.ui-band .special-views .icon-btn.active {
+  background: #ffd873;
+  border-color: #e0a52a;
+}
+
+body.ui-band button.special-view-item.active {
+  background: #ffd873;
+}
+
+/* The wall views' drawn icons (all layouts): one room at four wall heights. */
+svg.wall-view-icon {
+  display: block;
+  width: 20px;
+  height: 24px;
+}
+
+/* Band: the Classic | Band switch sits inside the 👁️‍🗨️ menu rather than floating top right. */
+body.ui-band .special-views-menu .layout-switch {
+  position: static;
+  align-self: flex-start;
+  padding: 2px;
+  background: #fff3d6;
+  box-shadow: none;
+}
+
+body.ui-band .special-views-menu .layout-switch > span {
+  display: none;
+}
+
+/* The color wheel a Furnish piece opens on right-click: colored wedges round the piece's own color. */
+.color-wheel {
+  position: fixed;
+  z-index: 60;
+  transform: translate(-50%, -85px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  filter: drop-shadow(0 6px 14px rgba(60, 40, 10, 0.28));
+  animation: color-wheel-in 0.12s ease-out;
+}
+
+@keyframes color-wheel-in {
+  from { opacity: 0; transform: translate(-50%, -85px) scale(0.85); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .color-wheel { animation: none; }
+  .color-wheel-wedge { transition: none; }
+}
+
+.color-wheel-wedge {
+  cursor: pointer;
+  stroke: #fff8ea;
+  stroke-width: 2;
+  transition: transform 0.1s ease;
+}
+
+.color-wheel-wedge:hover {
+  transform: translate(var(--pop-x), var(--pop-y));
+}
+
+.color-wheel-wedge.current,
+.color-wheel-middle.current {
+  stroke: #3d3226;
+  stroke-width: 3;
+}
+
+.color-wheel-middle {
+  cursor: pointer;
+  stroke: #fff8ea;
+  stroke-width: 3;
+}
+
+.color-wheel-back {
+  font-size: 18px;
+  fill: #3d3226;
+  pointer-events: none;
+}
+
+.color-wheel-label {
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 2px solid #d8c9a3;
+  background: #fff8ea;
+  color: #5b4a30;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* A colorable piece in the palette: a dot of the color it'll be placed in. */
+/* Shaped like a drop of paint: a square rounded on three corners, turned so the sharp one points up. */
+.furniture-btn .piece-color-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 9px;
+  height: 9px;
+  border-radius: 0 50% 50% 50%;
+  transform: rotate(45deg);
+  box-shadow: 0 0 0 1px #9c8a62;
+}
