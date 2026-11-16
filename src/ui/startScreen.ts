@@ -1,4 +1,4 @@
-import { savedWhen } from './toolbar';
+import { houseSize, savedWhen } from './toolbar';
 import type { HouseSummary, NewHouseStart } from './toolbar';
 
 export interface StartScreenCallbacks {
@@ -14,9 +14,9 @@ export interface StartScreenCallbacks {
 
 /** The ways to start a new house, as the start screen offers them. */
 const NEW_HOUSES: { start: Exclude<NewHouseStart, 'copy'>; symbol: string; name: string; about: string }[] = [
-  { start: 'starter', symbol: '🏡', name: 'Starter house', about: 'Furnished and ready to move into' },
-  { start: 'default', symbol: '🌳', name: 'Garden lot', about: 'A big walled lot with gardens and pets' },
-  { start: 'empty', symbol: '🟩', name: 'Empty lot', about: 'Bare ground to build from scratch' },
+  { start: 'starter', symbol: '🏡', name: 'Starter house', about: 'Furnished, for a couple to move into' },
+  { start: 'default', symbol: '🌳', name: 'Garden lot', about: 'A big walled lot and a big household' },
+  { start: 'empty', symbol: '🟩', name: 'Empty lot', about: 'Bare ground and a couple to build for' },
 ];
 
 /** How long the screen takes to fade away, in milliseconds. Matches the CSS. */
@@ -70,7 +70,7 @@ export function createStartScreen(parent: HTMLElement, callbacks: StartScreenCal
       el(
         'span',
         'start-play-details',
-        current ? `${current.name} · ${current.pieces} ${current.pieces === 1 ? 'piece' : 'pieces'} · saved ${savedWhen(current.savedAt)}` : 'The starter house is ready for you',
+        current ? `${current.name} · ${houseSize(current)} · saved ${savedWhen(current.savedAt)}` : 'The starter house is ready for you',
       ),
     );
     play.onclick = () => choose(callbacks.onContinue);
@@ -93,7 +93,7 @@ export function createStartScreen(parent: HTMLElement, callbacks: StartScreenCal
       for (const house of others) {
         const row = el('button', 'start-house');
         row.title = `Open ${house.name}`;
-        row.append(el('span', 'start-house-name', `🏠 ${house.name}`), el('span', 'start-house-details', `${house.pieces} ${house.pieces === 1 ? 'piece' : 'pieces'} · ${savedWhen(house.savedAt)}`));
+        row.append(el('span', 'start-house-name', `🏠 ${house.name}`), el('span', 'start-house-details', `${houseSize(house)} · ${savedWhen(house.savedAt)}`));
         row.onclick = () => choose(() => callbacks.onOpen(house.id));
         houses.appendChild(row);
       }

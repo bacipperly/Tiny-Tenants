@@ -3,6 +3,8 @@ import type { Route } from './pathOverlay';
 import type { RoomLight } from '../build/roomLighting';
 import { getFurnitureDef } from '../build/furnitureCatalog';
 import { loadHousehold, saveHousehold } from '../persistence/save';
+import type { HouseholdData } from '../persistence/save';
+import { disposeTree } from '../scene/dispose';
 import type { NeedsPanelView } from '../ui/needsPanel';
 import { Chatter } from './chatter';
 import { Chores } from './chores';
@@ -62,14 +64,14 @@ export class Household {
   private bubblesVisible = false;
   /** Pawns on floors above this one are hidden, like the floors. */
   private topShownLevel = Infinity;
-  private relationships: Relationships;
-  private chatter: Chatter;
-  private meals: Meals;
-  private messes: Messes;
-  private chores: Chores;
+  private relationships!: Relationships;
+  private chatter!: Chatter;
+  private meals!: Meals;
+  private messes!: Messes;
+  private chores!: Chores;
   /** Swimming, soaking and sitting at the edge of the pool. */
-  readonly swimming: Swimming;
-  private privacy: Privacy;
+  swimming!: Swimming;
+  private privacy!: Privacy;
   /** Pawns you've sent to switch something on or off, like lighting the fire. */
   private switching = new Map<Pawn, { pieceId: string; turnOn: boolean; secondsLeft: number }>();
   /** Pawns you've sent over to someone, to talk, joke, hug or argue once they get there. */
@@ -78,7 +80,7 @@ export class Household {
   onSelectionChange: (() => void) | null = null;
   /** Someone's hit the water, for a splash. */
   onSplash: ((x: number, z: number, size?: number) => void) | null = null;
-  private wanderer: Wanderer;
+  private wanderer!: Wanderer;
   private wandering = false;
   private clock = 0;
   /** Who's crossing each door. */
@@ -90,8 +92,38 @@ export class Household {
 
   constructor(world: World) {
     this.world = world;
-    const model = world;
-    const saved = loadHousehold();
+    this.setUp(loadHousehold());
+  }
+
+  /**
+   * Swaps the people living here for another household, when you go to a
+   * different house: everyone here leaves, with whatever they were doing and
+   * the mess they made, and the new household moves in with theirs.
+   */
+  moveIn(saved: HouseholdData) {
+    for (const pawn of this.pawns) {
+      this.group.remove(pawn.group);
+      disposeTree(pawn.group);
+    }
+    this.pawns = [];
+    this.messes.clear();
+    this.group.remove(this.messes.group);
+    this.switching.clear();
+    this.socials.clear();
+    this.doorHolders.clear();
+    this.passingPairs.clear();
+    this.excusedPairs.clear();
+    this.setUp(saved);
+    this.onSelectionChange?.();
+  }
+
+  /** Everything about the household that's saved, for copying it into a new house. */
+  snapshot(): HouseholdData {
+    return structuredClone({ pawns: this.roster, selectedId: this.selectedId, relationships: this.relationships.toJSON(), messes: this.messes.toJSON() });
+  }
+
+  private setUp(saved: HouseholdData | null) {
+    const model = this.world;
     this.relationships = new Relationships(saved?.relationships, () => this.remember());
     this.chatter = new Chatter(model, this.relationships);
     this.privacy = new Privacy(model, this.relationships);

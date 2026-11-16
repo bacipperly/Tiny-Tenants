@@ -1460,6 +1460,13 @@ export interface HouseSummary {
   name: string;
   savedAt: number;
   pieces: number;
+  /** How many people live there. */
+  people: number;
+}
+
+/** "2 people · 75 pieces", to tell houses apart at a glance. */
+export function houseSize(house: HouseSummary): string {
+  return `${house.people} ${house.people === 1 ? 'person' : 'people'} · ${house.pieces} ${house.pieces === 1 ? 'piece' : 'pieces'}`;
 }
 
 /** What a new house starts from. */
@@ -1609,7 +1616,7 @@ export function createFileControls(container: HTMLElement, callbacks: FileContro
     }
     const details = document.createElement('span');
     details.className = 'house-details';
-    details.textContent = `${isCurrent ? "You're here · " : ''}${house.pieces} ${house.pieces === 1 ? 'piece' : 'pieces'} · saved ${savedWhen(house.savedAt)}`;
+    details.textContent = `${isCurrent ? "You're here · " : ''}${houseSize(house)} · saved ${savedWhen(house.savedAt)}`;
     main.appendChild(details);
     row.appendChild(main);
 

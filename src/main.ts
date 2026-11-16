@@ -18,7 +18,7 @@ import type { ToolId } from './build/tools';
 import { createBuildToolbar, createViewControls, createFileControls } from './ui/toolbar';
 import type { WallViewMode, NewHouseStart } from './ui/toolbar';
 import { createStartScreen } from './ui/startScreen';
-import { saveModel, loadModel, hasSave, loadDefaultHouse, loadStarterHouse, lastSavedAt, listHouses, currentHouse, openHouse, createHouse, renameHouse, deleteHouse, uniqueName } from './persistence/save';
+import { saveModel, loadModel, hasSave, loadDefaultHouse, loadStarterHouse, lastSavedAt, listHouses, currentHouse, openHouse, createHouse, renameHouse, deleteHouse, uniqueName, loadHousehold, newHousehold } from './persistence/save';
 import { EditHistory } from './grid/editHistory';
 import { Household } from './sim/household';
 import { World } from './sim/world';
@@ -809,7 +809,15 @@ if (UI_LAYOUT === 'band') {
 /** Switches to a saved house, from the 📁 menu or the start screen. */
 function openSavedHouse(id: string) {
   const name = listHouses().find((house) => house.id === id)?.name ?? 'that house';
-  switchHouse(() => openHouse(id, house), `🏠 Opened ${name}`, `⚠️ Couldn't open ${name}: its save couldn't be read.`);
+  switchHouse(
+    () => {
+      if (!openHouse(id, house)) return false;
+      household.moveIn(loadHousehold());
+      return true;
+    },
+    `🏠 Opened ${name}`,
+    `⚠️ Couldn't open ${name}: its save couldn't be read.`,
+  );
 }
 
 /** Starts a new house, from the 📁 menu or the start screen, and saves it straight away under a name of its own. */
@@ -819,13 +827,18 @@ function startNewHouse(start: NewHouseStart) {
   switchHouse(
     () => {
       const previous = currentHouse()?.id;
+      // Who moves in: a copy brings everyone along, and anything else gets a household of its own.
+      const people = start === 'copy' ? household.snapshot() : newHousehold(start);
       if (start !== 'copy') {
         house.clear();
         if (start === 'starter') loadStarterHouse(house);
         if (start === 'default') loadDefaultHouse(house);
       }
       const result = createHouse(name, house);
-      if (result.ok) return true;
+      if (result.ok) {
+        household.moveIn(people);
+        return true;
+      }
       // Back to the house you were in, so the next save can't put the new one over it.
       if (previous) openHouse(previous, house);
       return false;
@@ -843,11 +856,12 @@ function startNewHouse(start: NewHouseStart) {
 function switchHouse(load: () => boolean, done: string, failed: string) {
   if (houseChanged && !saveHouse('on its own')) return;
   toolController.resetPreview();
-  household.clearMesses();
+  // Each house keeps its own household and mess, so the one you leave is left as it was.
   const loaded = load();
   goToLevel(0);
   centerCamera();
   household.placeEveryoneAtStart(houseCenter(), cameraRig.getCameraDirXZ());
+  updatePawnPanel();
   editHistory.reset();
   houseChanged = false;
   fileControls.setLastSaved(lastSavedAt());

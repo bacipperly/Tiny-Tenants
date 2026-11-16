@@ -11,12 +11,15 @@ import defaultHousehold from './defaultHousehold.json';
 /** Where the one house was kept before there could be several. Read once to move it into the list, and otherwise left alone as a backup. */
 const LEGACY_KEY = 'house-builder-save-v1';
 const LEGACY_SAVED_AT_KEY = 'house-builder-saved-at';
+/** The household from before each house had its own: the people in a game with no saved house yet, and the people a house saved before then moves in with. */
 const HOUSEHOLD_KEY = 'house-builder-household-v1';
 /** The list of saved houses, without the houses themselves. */
 const HOUSES_KEY = 'house-builder-houses-v1';
 /** Which house is being played. */
 const CURRENT_KEY = 'house-builder-current-house';
 const houseKey = (id: string) => `house-builder-house-${id}`;
+/** Each house's own household: who lives there, how they get along, and the mess they've made. */
+const householdKey = (id: string) => `house-builder-household-${id}`;
 
 /** What the 📁 menu lists for each saved house. */
 export interface HouseEntry {
@@ -26,6 +29,8 @@ export interface HouseEntry {
   savedAt: number;
   /** How many pieces of furniture it has, to tell houses apart at a glance. */
   pieces: number;
+  /** How many people live there. Worked out when the list is read, not saved in it. */
+  people: number;
 }
 
 export type SaveResult = { ok: true } | { ok: false; reason: string };
@@ -35,7 +40,7 @@ export function listHouses(): HouseEntry[] {
   moveOldSaveIn();
   try {
     const houses = JSON.parse(localStorage.getItem(HOUSES_KEY) ?? '[]') as HouseEntry[];
-    return Array.isArray(houses) ? houses.sort((a, b) => b.savedAt - a.savedAt) : [];
+    return Array.isArray(houses) ? houses.map((house) => ({ ...house, people: householdOf(house.id).pawns.length })).sort((a, b) => b.savedAt - a.savedAt) : [];
   } catch {
     return [];
   }
@@ -88,7 +93,10 @@ export function renameHouse(id: string, name: string): SaveResult {
 export function deleteHouse(id: string): SaveResult {
   if (localStorage.getItem(CURRENT_KEY) === id) return { ok: false, reason: "that's the house you're in" };
   const result = writeList(listHouses().filter((house) => house.id !== id));
-  if (result.ok) localStorage.removeItem(houseKey(id));
+  if (result.ok) {
+    localStorage.removeItem(houseKey(id));
+    localStorage.removeItem(householdKey(id));
+  }
   return result;
 }
 
@@ -121,13 +129,14 @@ function store(id: string, name: string, house: House): SaveResult {
   // Some browsers, in private windows, accept the save and keep nothing.
   if (localStorage.getItem(houseKey(id)) !== json) return { ok: false, reason: "the browser didn't keep it" };
   const houses = listHouses().filter((house) => house.id !== id);
-  houses.push({ id, name, savedAt: Date.now(), pieces: house.furnitureCount() });
+  houses.push({ id, name, savedAt: Date.now(), pieces: house.furnitureCount(), people: 0 });
   return writeList(houses);
 }
 
 function writeList(houses: HouseEntry[]): SaveResult {
   try {
-    localStorage.setItem(HOUSES_KEY, JSON.stringify(houses));
+    // The people count is read from each household, so it isn't kept in the list.
+    localStorage.setItem(HOUSES_KEY, JSON.stringify(houses.map(({ people: _people, ...entry }) => entry)));
     return { ok: true };
   } catch (error) {
     return { ok: false, reason: storageProblem(error) };
@@ -206,20 +215,52 @@ export interface HouseholdData {
   messes?: Mess[];
 }
 
+/** Saves the household of the house being played, or, before there's a saved house, the household a new game starts with. */
 export function saveHousehold(data: HouseholdData) {
+  const id = localStorage.getItem(CURRENT_KEY);
   try {
-    localStorage.setItem(HOUSEHOLD_KEY, JSON.stringify(data));
+    localStorage.setItem(id ? householdKey(id) : HOUSEHOLD_KEY, JSON.stringify(data));
   } catch {
     // Only who the pawns are and how they get along would be lost, which isn't worth interrupting play for.
   }
 }
 
-export function loadHousehold(): HouseholdData | null {
+/** The household of the house being played. */
+export function loadHousehold(): HouseholdData {
+  const id = currentHouse()?.id;
+  return id ? householdOf(id) : sharedHousehold();
+}
+
+/**
+ * The people who live in a saved house. A house saved before each house had
+ * its own household moves in with the one everyone used to share, so nobody
+ * disappears.
+ */
+function householdOf(id: string): HouseholdData {
+  return readHousehold(householdKey(id)) ?? sharedHousehold();
+}
+
+/** The household from before each house had its own, or with nobody saved yet, the couple a new game's starter house starts with. */
+function sharedHousehold(): HouseholdData {
+  return readHousehold(HOUSEHOLD_KEY) ?? newHousehold('starter');
+}
+
+function readHousehold(key: string): HouseholdData | null {
   try {
-    const data = JSON.parse(localStorage.getItem(HOUSEHOLD_KEY) ?? 'null') as HouseholdData | null;
-    // With nobody saved yet, the game starts with the default household.
-    return data && data.pawns.length > 0 ? data : (structuredClone(defaultHousehold) as HouseholdData);
+    const data = JSON.parse(localStorage.getItem(key) ?? 'null') as HouseholdData | null;
+    return data && Array.isArray(data.pawns) && data.pawns.length > 0 ? data : null;
   } catch {
     return null;
   }
+}
+
+/** How many people a new house starts with: the whole household on the Garden lot, and a couple anywhere else. */
+const NEW_HOUSE_PEOPLE = 2;
+
+/** Who moves into a new house. The Garden lot gets the default household; a Starter house or Empty lot gets its first two. */
+export function newHousehold(start: 'empty' | 'starter' | 'default'): HouseholdData {
+  const everyone = structuredClone(defaultHousehold) as HouseholdData;
+  if (start === 'default') return everyone;
+  const pawns = everyone.pawns.slice(0, NEW_HOUSE_PEOPLE);
+  return { pawns, selectedId: pawns[0].id };
 }
