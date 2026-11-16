@@ -6,7 +6,9 @@ A cozy house-building and life game that runs in the browser. Build a home squar
 - **Furnish:** beds, sofas, kitchens, bathrooms, lamps, decor and pets. Right-click a palette item to pick its color, and hold-drag while placing to turn it.
 - **Live:** pawns with needs who sleep, eat, cook, wash, chat, swim, dive and soak. Right-click the ground or a piece to tell them what to do.
 
-## Running it
+## Playing it
+
+Play it online at https://bacipperly.github.io/Tiny-Tenants/ (it redeploys on every push to `main`), or run it locally:
 
 ```bash
 npm install
