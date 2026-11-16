@@ -16,7 +16,8 @@ import { gableHit } from './build/roofBuilder';
 import { ToolController } from './build/tools';
 import type { ToolId } from './build/tools';
 import { createBuildToolbar, createViewControls, createFileControls } from './ui/toolbar';
-import type { WallViewMode } from './ui/toolbar';
+import type { WallViewMode, NewHouseStart } from './ui/toolbar';
+import { createStartScreen } from './ui/startScreen';
 import { saveModel, loadModel, hasSave, loadDefaultHouse, loadStarterHouse, lastSavedAt, listHouses, currentHouse, openHouse, createHouse, renameHouse, deleteHouse, uniqueName } from './persistence/save';
 import { EditHistory } from './grid/editHistory';
 import { Household } from './sim/household';
@@ -753,31 +754,9 @@ editHistory.onChange = () => {
 const fileControls = createFileControls(fileControlsEl, {
   onSave: () => saveHouse('by hand'),
   houses: () => ({ list: listHouses(), currentId: currentHouse()?.id ?? null }),
-  onOpen: (id) => {
-    const name = listHouses().find((house) => house.id === id)?.name ?? 'that house';
-    switchHouse(() => openHouse(id, house), `🏠 Opened ${name}`, `⚠️ Couldn't open ${name}: its save couldn't be read.`);
-  },
-  onNew: (start) => {
-    const base = start === 'copy' ? `${currentHouse()?.name ?? 'My house'} copy` : start === 'starter' ? 'Starter house' : start === 'default' ? 'Garden lot' : 'New house';
-    const name = uniqueName(base);
-    switchHouse(
-      () => {
-        const previous = currentHouse()?.id;
-        if (start !== 'copy') {
-          house.clear();
-          if (start === 'starter') loadStarterHouse(house);
-          if (start === 'default') loadDefaultHouse(house);
-        }
-        const result = createHouse(name, house);
-        if (result.ok) return true;
-        // Back to the house you were in, so the next save can't put the new one over it.
-        if (previous) openHouse(previous, house);
-        return false;
-      },
-      `🆕 Started ${name}. Rename it from the 📁 menu`,
-      `⚠️ Couldn't start a new house: the browser wouldn't save it. You're still in the house you were in.`,
-    );
-  },
+  onOpen: openSavedHouse,
+  onNew: startNewHouse,
+  onHome: () => showStartScreen(),
   onRename: (id, name) => {
     const result = renameHouse(id, name);
     if (!result.ok) fileControls.showMessage(`⚠️ Couldn't rename it: ${result.reason}.`, 'error');
@@ -825,6 +804,35 @@ if (UI_LAYOUT === 'band') {
   toolbar.inspectorSlot.appendChild(hintEl);
   bandLiveSlot = toolbar.householdSlot;
   updateNeedsPanelVisibility();
+}
+
+/** Switches to a saved house, from the 📁 menu or the start screen. */
+function openSavedHouse(id: string) {
+  const name = listHouses().find((house) => house.id === id)?.name ?? 'that house';
+  switchHouse(() => openHouse(id, house), `🏠 Opened ${name}`, `⚠️ Couldn't open ${name}: its save couldn't be read.`);
+}
+
+/** Starts a new house, from the 📁 menu or the start screen, and saves it straight away under a name of its own. */
+function startNewHouse(start: NewHouseStart) {
+  const base = start === 'copy' ? `${currentHouse()?.name ?? 'My house'} copy` : start === 'starter' ? 'Starter house' : start === 'default' ? 'Garden lot' : 'New house';
+  const name = uniqueName(base);
+  switchHouse(
+    () => {
+      const previous = currentHouse()?.id;
+      if (start !== 'copy') {
+        house.clear();
+        if (start === 'starter') loadStarterHouse(house);
+        if (start === 'default') loadDefaultHouse(house);
+      }
+      const result = createHouse(name, house);
+      if (result.ok) return true;
+      // Back to the house you were in, so the next save can't put the new one over it.
+      if (previous) openHouse(previous, house);
+      return false;
+    },
+    `🆕 Started ${name}. Rename it from the 📁 menu`,
+    `⚠️ Couldn't start a new house: the browser wouldn't save it. You're still in the house you were in.`,
+  );
 }
 
 /**
@@ -990,6 +998,8 @@ function selectNextPawn() {
 window.addEventListener('keydown', (e) => {
   const target = e.target as HTMLElement | null;
   if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+  // The start screen takes its own keys; the game's wait until you're in.
+  if (startScreenShown) return;
 
   // The Sims' keys for its modes, and for hiding everything but the house.
   const modeKey = ({ F1: 'live', F2: 'furnish', F3: 'build' } as const)[e.key as 'F1' | 'F2' | 'F3'];
@@ -1124,6 +1134,32 @@ if (import.meta.env.DEV) {
   Object.assign(window, { __game: { house, views, household, toolController, editHistory, goToLevel, cameraRig, get activeLevel() { return activeLevel; } } });
 }
 
+// The start screen the game opens on, with the house turning slowly behind it.
+/** Whether the start screen is up: the game's menus and keys are put away meanwhile. */
+let startScreenShown = false;
+/** When the turning view last moved which walls are cut away. */
+let showcaseCutawayAt = 0;
+const startScreen = createStartScreen(document.getElementById('app')!, {
+  houses: () => ({ list: listHouses(), currentId: currentHouse()?.id ?? null }),
+  onContinue: () => {},
+  onOpen: openSavedHouse,
+  onNew: startNewHouse,
+  onShownChange: (shown) => {
+    startScreenShown = shown;
+    document.body.classList.toggle('at-start', shown);
+    toolController.resetPreview();
+    cameraRig.setShowcase(shown);
+    if (!shown) updateCutaway();
+  },
+});
+
+/** Back to the start screen, saving first so the house it shows is the one you were in. */
+function showStartScreen() {
+  if (houseChanged) saveHouse('on its own');
+  startScreen.show();
+}
+startScreen.show();
+
 let lastFrameTime = performance.now();
 
 function animate(now = performance.now()) {
@@ -1139,6 +1175,10 @@ function animate(now = performance.now()) {
   groundGrid.setCursor(pointerNdc && raycastGround(pointerNdc, camera, activeLevel * LEVEL_HEIGHT));
   groundGrid.update(seconds);
   cameraRig.update(seconds);
+  if (startScreenShown && now - showcaseCutawayAt > 250) {
+    showcaseCutawayAt = now;
+    updateCutaway();
+  }
   if (!paused) household.update(seconds);
   if (pathOverlay.visible) pathOverlay.update(household.routes(), now / 1000);
   const inUse = household.piecesInUse();

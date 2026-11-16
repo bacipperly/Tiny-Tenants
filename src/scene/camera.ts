@@ -4,6 +4,11 @@ import { LOT_MAX_CELL } from '../grid/gridMath';
 const PAN_LIMIT = LOT_MAX_CELL + 8;
 const GLIDE_SPEED = 5;
 const GLIDE_ARRIVED_DISTANCE = 0.01;
+/** How fast the start screen turns the view round the house: one full turn in about a minute and a half. */
+const SHOWCASE_DEGREES_PER_SECOND = 4;
+/** How far the house moves right on the start screen, as a share of the screen's width, and how wide (to tall) the screen has to be for it. */
+const SHOWCASE_SHIFT = 0.17;
+const SHOWCASE_MIN_ASPECT = 1.1;
 
 /**
  * Isometric camera rig for v1. Kept behind this small interface (rotate, zoom,
@@ -49,8 +54,26 @@ export class IsoCameraRig {
     this.glideTarget = new THREE.Vector3(this.clampToPanLimit(p.x), this.pivot.y, this.clampToPanLimit(p.z));
   }
 
+  /** The start screen's slow turn round the house, in degrees, on top of the usual quarter turns. */
+  private spin = 0;
+  private spinning = false;
+
+  /** Turns the view slowly round and round the house, for the start screen. Stopping puts it back square. */
+  setShowcase(on: boolean) {
+    this.spinning = on;
+    if (!on && this.spin !== 0) {
+      this.spin = 0;
+      this.updatePosition();
+    }
+    this.applyFrustum();
+  }
+
   /** Call once a frame. */
   update(seconds: number) {
+    if (this.spinning) {
+      this.spin = (this.spin + SHOWCASE_DEGREES_PER_SECOND * seconds) % 360;
+      this.updatePosition();
+    }
     const ease = 1 - Math.exp(-GLIDE_SPEED * seconds);
     const rising = this.pivot.y !== this.targetHeight;
     if (rising) {
@@ -130,12 +153,12 @@ export class IsoCameraRig {
   /** Normalized horizontal (XZ) direction from the pivot toward the camera.
    * Used to decide which walls face the camera and should be hidden. */
   getCameraDirXZ(): THREE.Vector2 {
-    const theta = THREE.MathUtils.degToRad(45 + this.yawIndex * 90);
+    const theta = THREE.MathUtils.degToRad(45 + this.yawIndex * 90 + this.spin);
     return new THREE.Vector2(Math.sin(theta), Math.cos(theta));
   }
 
   private updatePosition() {
-    const theta = THREE.MathUtils.degToRad(45 + this.yawIndex * 90);
+    const theta = THREE.MathUtils.degToRad(45 + this.yawIndex * 90 + this.spin);
     const elevation = THREE.MathUtils.degToRad(this.elevationDeg);
     const horizontal = this.radius * Math.cos(elevation);
     const vertical = this.radius * Math.sin(elevation);
@@ -153,6 +176,10 @@ export class IsoCameraRig {
     this.camera.right = halfWidth;
     this.camera.top = halfHeight;
     this.camera.bottom = -halfHeight;
+    // On the start screen, the house slides right, out from behind the card on the left, on a screen wide enough to have room.
+    const shift = this.spinning && this.aspect > SHOWCASE_MIN_ASPECT ? SHOWCASE_SHIFT : 0;
+    if (shift) this.camera.setViewOffset(1000, 1000, -shift * 1000, 0, 1000, 1000);
+    else this.camera.clearViewOffset();
     this.camera.updateProjectionMatrix();
   }
 }

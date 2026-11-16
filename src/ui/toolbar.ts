@@ -1474,6 +1474,8 @@ export interface FileControlsCallbacks {
   onDelete: (id: string) => void;
   /** The saved houses, and which one you're in. */
   houses: () => { list: HouseSummary[]; currentId: string | null };
+  /** Back to the title screen the game opens on. */
+  onHome: () => void;
 }
 
 /** How long a save message stays up. A failure stays longer, since it needs reading. */
@@ -1482,7 +1484,7 @@ const MESSAGE_SECONDS = { ok: 2.2, error: 7 };
 const DELETE_CONFIRM_SECONDS = 3;
 
 /** When something was saved, the way you'd say it. */
-function savedWhen(time: number): string {
+export function savedWhen(time: number): string {
   const minutes = Math.floor((Date.now() - time) / 60000);
   if (minutes < 1) return 'just now';
   if (minutes === 1) return 'a minute ago';
@@ -1688,6 +1690,14 @@ export function createFileControls(container: HTMLElement, callbacks: FileContro
       start('🏡', 'Starter house — a little furnished home with a bedroom, kitchen, bathroom and living room, the house a new game starts with', 'starter'),
       start('🌳', 'Garden lot — the big walled lot with gardens, trees and pets that new games used to start with', 'default'),
       start('📋', "Copy of this house — this one as it is now, as a new house to change", 'copy'),
+    );
+
+    menu.append(
+      heading('Tiny Tenants'),
+      overflowMenuItem('🏠', 'Start screen — back to the title screen the game opens on', () => {
+        close();
+        callbacks.onHome();
+      }),
     );
   }
 
