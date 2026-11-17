@@ -264,3 +264,56 @@ export function newHousehold(start: 'empty' | 'starter' | 'default'): HouseholdD
   const pawns = everyone.pawns.slice(0, NEW_HOUSE_PEOPLE);
   return { pawns, selectedId: pawns[0].id };
 }
+
+/** What an exported house file says it is, so a file that isn't one can be turned away. */
+const EXPORT_KIND = 'tiny-tenants-house';
+
+/** A house saved as a file: the house and the people who live there, to carry to another browser or computer. */
+export interface HouseFile {
+  kind: typeof EXPORT_KIND;
+  version: 1;
+  name: string;
+  exportedAt: number;
+  house: HouseData;
+  household: HouseholdData;
+}
+
+/** The house being played, with its household, as a file's worth of text. */
+export function exportHouse(name: string, house: House, household: HouseholdData): string {
+  const file: HouseFile = { kind: EXPORT_KIND, version: 1, name, exportedAt: Date.now(), house: house.toJSON(), household };
+  return JSON.stringify(file);
+}
+
+/**
+ * Reads a house file and saves it as a new house, under its own name or one
+ * like it, which becomes the house being played. Says who lives there, or
+ * why the file couldn't be used. If it can't be, the house you were in is
+ * opened again.
+ */
+export function importHouse(text: string, house: House): { ok: true; name: string; household: HouseholdData } | { ok: false; reason: string } {
+  let file: HouseFile;
+  try {
+    file = JSON.parse(text) as HouseFile;
+  } catch {
+    return { ok: false, reason: "that file isn't a house file" };
+  }
+  if (file?.kind !== EXPORT_KIND || !file.house || typeof file.house !== 'object') return { ok: false, reason: "that file isn't a Tiny Tenants house" };
+  const previous = currentHouse()?.id;
+  const goBack = () => {
+    if (previous) openHouse(previous, house);
+  };
+  try {
+    house.loadJSON(upgrade(file.house));
+  } catch {
+    goBack();
+    return { ok: false, reason: "the house in that file couldn't be read" };
+  }
+  const name = uniqueName((file.name || 'Imported house').slice(0, 40));
+  const result = createHouse(name, house);
+  if (!result.ok) {
+    goBack();
+    return result;
+  }
+  const people = file.household && Array.isArray(file.household.pawns) && file.household.pawns.length > 0 ? file.household : newHousehold('starter');
+  return { ok: true, name, household: people };
+}

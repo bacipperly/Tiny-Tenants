@@ -34,6 +34,9 @@ import { Wanderer } from './wandering';
 
 /** How long it takes to light a fire, or put it out. */
 const SWITCH_SECONDS = 2;
+/** How far back toward the camera to look for a wall hiding a pawn, and how much of the pawn's own body to leave out of the look. */
+const SIGHT_LINE = 100;
+const CLEAR_OF_BODY = 0.3;
 
 const NEW_PAWN_COLORS = ['#3a86ff', '#ff6b6b', '#ffd166', '#06d6a0', '#c77dff', '#ff9f1c', '#f15bb5', '#4a4e69'];
 
@@ -124,6 +127,28 @@ export class Household {
     this.excusedPairs.clear();
     this.setUp(saved);
     this.onSelectionChange?.();
+  }
+
+  /**
+   * Shows the outline of any pawn a wall or roof hides from the camera, so
+   * nobody gets lost behind the house. `occluders` gives what can hide a pawn
+   * on a level: the walls of that level and above that are showing.
+   */
+  updateSilhouettes(camera: THREE.Camera, occluders: (level: number) => THREE.Object3D[]) {
+    const ray = new THREE.Raycaster();
+    const forward = camera.getWorldDirection(new THREE.Vector3());
+    const perspective = (camera as THREE.PerspectiveCamera).isPerspectiveCamera === true;
+    for (const pawn of this.pawns) {
+      const middle = pawn.middlePosition();
+      // Straight back toward the camera: along its view for this flat camera, or to the camera itself in perspective.
+      const origin = perspective ? camera.position.clone() : middle.clone().addScaledVector(forward, -SIGHT_LINE);
+      const toward = middle.clone().sub(origin);
+      const distance = toward.length();
+      ray.set(origin, toward.normalize());
+      ray.far = distance - CLEAR_OF_BODY;
+      const blocked = ray.intersectObjects(occluders(pawn.level), true).some((hit) => isShown(hit.object));
+      pawn.setBehindWall(blocked);
+    }
   }
 
   /** Everything about the household that's saved, for copying it into a new house. */
@@ -737,6 +762,12 @@ export class Household {
 
   /** A door is free to whoever asks first. Once crossing, a pawn never waits, so two pawns can't end up waiting on each other. */
   private claimDoor(pawn: Pawn, door: string): boolean {
+    // A proper flight of stairs is wide enough to pass on, so everyone shares it, brushing past as they would anywhere.
+    // A ship ladder, one square up, is still one at a time.
+    if (door.startsWith('stairs:')) {
+      const flight = this.world.flights().find((each) => `stairs:${each.id}` === door);
+      if (flight && flight.steps.length > 1) return true;
+    }
     const holder = this.doorHolders.get(door);
     if (holder && holder !== pawn) return false;
     this.doorHolders.set(door, pawn);

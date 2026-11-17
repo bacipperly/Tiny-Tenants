@@ -1,6 +1,7 @@
 import type { Advertisement, Need } from './needs';
 import { NEEDS, NEED_NAMES } from './needs';
 import { BUFFS, TRAITS, traitsOf } from './personality';
+import { nightfall } from './dayClock';
 import type { BuffId, PawnTraits } from './personality';
 
 const FULL = 100;
@@ -16,6 +17,10 @@ const ORDINARY_SURROUNDINGS = 65;
 /** How quickly a need that comes from the surroundings catches up with them: about this many seconds to get most of the way. */
 const SURROUNDINGS_SETTLE_SECONDS = 8;
 const GROSSED_OUT_BELOW = 30;
+/** At night a pawn feels at least this short of energy, however rested, so a bed beats staying up. */
+const NIGHT_SLEEPINESS = 0.85;
+/** A piece offering this much energy is a bed to sleep in, which a pawn stays in through the night. */
+const BED_ENERGY = 18;
 
 /** What a pawn wants and how it feels, as opposed to where it is. Needs are forgotten on a refresh, the same as where it was standing. */
 export class Mind {
@@ -91,7 +96,9 @@ export class Mind {
     for (const need of NEED_NAMES) {
       const relief = advertisement[need];
       if (!relief) continue;
-      const shortfall = (FULL - this.needs[need]) / FULL;
+      let shortfall = (FULL - this.needs[need]) / FULL;
+      // At night everyone gets sleepy, so bed comes first.
+      if (need === 'energy') shortfall = Math.max(shortfall, nightfall() * NIGHT_SLEEPINESS);
       utility += shortfall * shortfall * relief * this.weightOf(need);
     }
     return utility;
@@ -105,6 +112,8 @@ export class Mind {
   /** Whether everything this piece fills is close to full. */
   isSatisfiedBy(advertisement: Advertisement): boolean {
     // A piece offering nothing, like a table with no food on it, can't have finished giving.
+    // And a bed isn't done with until morning.
+    if ((advertisement.energy ?? 0) >= BED_ENERGY && nightfall() > 0.5) return false;
     return NEED_NAMES.some((need) => advertisement[need]) && NEED_NAMES.every((need) => !advertisement[need] || this.needs[need] >= FULL - 2);
   }
 
@@ -118,7 +127,9 @@ export class Mind {
   }
 
   private decayOf(need: Need): number {
-    return traitsOf(this.traits).reduce((rate, trait) => rate * (TRAITS[trait].needDecay?.[need] ?? 1), 1);
+    // Staying up late is tiring.
+    const late = need === 'energy' ? 1 + nightfall() : 1;
+    return late * traitsOf(this.traits).reduce((rate, trait) => rate * (TRAITS[trait].needDecay?.[need] ?? 1), 1);
   }
 
   private weightOf(need: Need): number {

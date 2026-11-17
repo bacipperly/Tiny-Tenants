@@ -84,10 +84,12 @@ export interface FurniturePiece {
   lit?: boolean;
   /** Hex color it's been given, like a bed's bedding. Its own color if unset. */
   color?: string;
+  /** Something that grows, like a hedge: the day it was planted, counting from the first day played. */
+  plantedOn?: number;
 }
 
 /** What a fence or railing looks like. */
-export type FenceStyle = 'picket' | 'ranch' | 'privacy' | 'stone' | 'wood-rail' | 'iron-rail' | 'glass-rail';
+export type FenceStyle = 'picket' | 'ranch' | 'privacy' | 'stone' | 'wood-rail' | 'iron-rail' | 'glass-rail' | 'half-wall';
 
 /** A fence or railing along the edge between two squares: low, never a room's wall, and only a gate lets pawns through. */
 export interface FenceSegment {
@@ -97,6 +99,8 @@ export interface FenceSegment {
   style: FenceStyle;
   /** A gate in the fence, which swings open for pawns. */
   gate?: boolean;
+  /** Painted with the Paint tool; unset means the style's own colors. */
+  color?: string;
 }
 
 export interface GridModelData {
@@ -108,6 +112,10 @@ export interface GridModelData {
   apertures?: ApertureObject[];
   /** Left out of saves from before there were fences. */
   fences?: FenceSegment[];
+  /** Upstairs: edges whose railing drawn for you has been taken away, by wall key. Left out if there are none. */
+  railGaps?: string[];
+  /** Squares roofed in a style of their own, rather than the house's. Left out if there are none. */
+  roofAreas?: { x: number; z: number; style: 'flat' | 'hip' | 'gable' }[];
   /** Left out of saves without any. */
   pillars?: Pillar[];
   /** Gable ends painted by hand. Left out of saves without any: the rest take the color of the wall below. */
@@ -141,6 +149,10 @@ export class GridModel {
   private walls = new Map<string, WallSegment>();
   private apertures = new Map<string, ApertureObject>();
   private fences = new Map<string, FenceSegment>();
+  /** Edges whose auto-railing has been deleted, by wall key. */
+  private railGaps = new Set<string>();
+  /** Squares roofed in a style of their own, by cell key. */
+  private roofAreas = new Map<string, 'flat' | 'hip' | 'gable'>();
   private pillars = new Map<string, Pillar>();
   private gables = new Map<string, GablePaint>();
   private pools = new Map<string, PoolCell>();
@@ -243,6 +255,66 @@ export class GridModel {
   removeFence(x: number, z: number, dir: Direction) {
     if (!this.fences.delete(wallKey(x, z, dir))) return;
     this.notify();
+  }
+
+  /** Changes a fence to another style, keeping its gate and paint. */
+  restyleFence(x: number, z: number, dir: Direction, style: FenceStyle) {
+    const fence = this.getFence(x, z, dir);
+    if (!fence || fence.style === style) return;
+    this.fences.set(wallKey(x, z, dir), { ...fence, style });
+    this.notify();
+  }
+
+  /** Paints a fence, or with no color, puts it back to its style's own colors. */
+  paintFence(x: number, z: number, dir: Direction, color: string | undefined) {
+    const fence = this.getFence(x, z, dir);
+    if (!fence || fence.color === color) return;
+    const { color: _old, ...rest } = fence;
+    this.fences.set(wallKey(x, z, dir), color ? { ...rest, color } : rest);
+    this.notify();
+  }
+
+  /** Takes away the railing drawn for you along one edge upstairs, leaving the rest. */
+  removeRailing(x: number, z: number, dir: Direction) {
+    const key = wallKey(x, z, dir);
+    if (this.railGaps.has(key)) return;
+    this.railGaps.add(key);
+    this.notify();
+  }
+
+  /** Roofs these squares, a room say, in a style of their own; with none, they go back to the house's roof. */
+  setRoofArea(cells: { x: number; z: number }[], style: 'flat' | 'hip' | 'gable' | null) {
+    let changed = false;
+    for (const { x, z } of cells) {
+      const key = cellKey(x, z);
+      if ((this.roofAreas.get(key) ?? null) === style) continue;
+      if (style) this.roofAreas.set(key, style);
+      else this.roofAreas.delete(key);
+      changed = true;
+    }
+    if (changed) this.notify();
+  }
+
+  /** The roof style of a square of its own, if it has one. */
+  roofAreaAt(x: number, z: number): 'flat' | 'hip' | 'gable' | undefined {
+    return this.roofAreas.get(cellKey(x, z));
+  }
+
+  /** Whether any squares have a roof style of their own. */
+  get hasRoofAreas(): boolean {
+    return this.roofAreas.size > 0;
+  }
+
+  /** Puts every square back to the house's roof. */
+  clearRoofAreas() {
+    if (this.roofAreas.size === 0) return;
+    this.roofAreas.clear();
+    this.notify();
+  }
+
+  /** Whether the railing drawn for you along this edge has been taken away. */
+  hasRailGap(x: number, z: number, dir: Direction): boolean {
+    return this.railGaps.has(wallKey(x, z, dir));
   }
 
   getFence(x: number, z: number, dir: Direction): FenceSegment | undefined {
@@ -487,6 +559,14 @@ export class GridModel {
   }
 
   /** Picks a piece up and puts it down somewhere else, turned however it's turned now. */
+  /** Notes the day something that grows was planted, so it can grow in from there. */
+  plantFurniture(id: string, day: number) {
+    const piece = this.furniture.get(id);
+    if (!piece) return;
+    this.furniture.set(id, { ...piece, plantedOn: day });
+    this.notify();
+  }
+
   moveFurniture(id: string, x: number, z: number, rotation: 0 | 90 | 180 | 270) {
     const piece = this.furniture.get(id);
     if (!piece) return;
@@ -539,6 +619,8 @@ export class GridModel {
       ...(this.pillars.size > 0 && { pillars: this.allPillars() }),
       ...(this.gables.size > 0 && { gables: this.allGables() }),
       ...(this.pools.size > 0 && { pools: this.allPools() }),
+      ...(this.railGaps.size > 0 && { railGaps: [...this.railGaps] }),
+      ...(this.roofAreas.size > 0 && { roofAreas: [...this.roofAreas].map(([key, style]) => ({ ...parseCell(key), style })) }),
       version: SAVE_VERSION,
     };
   }
@@ -566,6 +648,8 @@ export class GridModel {
     for (const gable of data.gables ?? []) this.gables.set(`${gable.x},${gable.z},${gable.dir}`, gable);
     this.pools.clear();
     for (const pool of data.pools ?? []) this.pools.set(cellKey(pool.x, pool.z), pool);
+    this.railGaps = new Set(data.railGaps ?? []);
+    this.roofAreas = new Map((data.roofAreas ?? []).map(({ x, z, style }) => [cellKey(x, z), style]));
     for (const f of data.floors) this.floors.set(floorKey(f.x, f.z), f);
     for (const p of data.furniture) this.furniture.set(p.id, p);
     this.roomsStale = true;
@@ -576,6 +660,8 @@ export class GridModel {
     this.walls.clear();
     this.apertures.clear();
     this.fences.clear();
+    this.railGaps.clear();
+    this.roofAreas.clear();
     this.pillars.clear();
     this.gables.clear();
     this.pools.clear();
@@ -586,4 +672,9 @@ export class GridModel {
     this.roomsStale = false;
     this.notify();
   }
+}
+
+function parseCell(key: string): { x: number; z: number } {
+  const [x, z] = key.split(',').map(Number);
+  return { x, z };
 }

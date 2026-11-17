@@ -43,6 +43,11 @@ export class Sunlight {
     this.mesh.visible = false;
   }
 
+  /** How light it is outdoors, from 1 by day to 0 at night: daylight through the windows fades with it. */
+  setDaylight(amount: number) {
+    this.material.opacity = GLOW_OPACITY * amount;
+  }
+
   rebuild(model: GridModel) {
     const rooms = litRooms(model);
     // Repainting colors doesn't change the light, and this runs for every tile of a paint drag.

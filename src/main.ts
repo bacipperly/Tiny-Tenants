@@ -18,7 +18,9 @@ import type { ToolId } from './build/tools';
 import { createBuildToolbar, createViewControls, createFileControls } from './ui/toolbar';
 import type { WallViewMode, NewHouseStart } from './ui/toolbar';
 import { createStartScreen } from './ui/startScreen';
-import { saveModel, loadModel, hasSave, loadDefaultHouse, loadStarterHouse, lastSavedAt, listHouses, currentHouse, openHouse, createHouse, renameHouse, deleteHouse, uniqueName, loadHousehold, newHousehold } from './persistence/save';
+import { STAIR_DEFS } from './build/stairs';
+import { DayClock } from './sim/dayClock';
+import { saveModel, loadModel, hasSave, loadDefaultHouse, loadStarterHouse, lastSavedAt, listHouses, currentHouse, openHouse, createHouse, renameHouse, deleteHouse, uniqueName, loadHousehold, newHousehold, exportHouse, importHouse } from './persistence/save';
 import { EditHistory } from './grid/editHistory';
 import { Household } from './sim/household';
 import { World } from './sim/world';
@@ -144,6 +146,8 @@ function applyLevelView() {
 
 function updateCutaway() {
   views.forEach((view, level) => {
+    // In Live, walls facing the camera fade rather than being cut down.
+    view.walls.liveFade = inLive && level === activeLevel;
     view.walls.cutawayEnabled = cutawayOn && level === activeLevel;
     view.walls.allLowered = wallsDown && level === activeLevel;
     view.walls.updateCutaway(cameraRig.getCameraDirXZ());
@@ -207,16 +211,16 @@ const HINTS: Record<ToolId, string> = {
   door: 'Click a wall to add a door, in whichever style is picked below. Clicking a door swaps it for this style 🚪',
   window: 'Click or drag along walls to add windows 🪟',
   floor: 'Pick a surface, then drag to lay tiles, or drag over tiles to change them. Upstairs, tiles go over rooms, up to 2 squares past a wall or pillar below, and round the top of stairs ⬛',
-  paint: 'Choose walls or floors, pick a color, then click or drag to paint. With the roof on, walls include the gable ends 🎨',
-  roof: 'Pick a roof for the whole house, flat, hip or gable, and what it is covered in. It shows with the Roof view, which this turns on 🏠',
+  paint: 'Choose walls or floors, pick a color, then click or drag to paint. Walls include fences and railings, and with the roof on, the gable ends 🎨',
+  roof: 'Pick a roof for the whole house, flat, hip or gable, its pitch, color and what it is covered in. Per room gives one room a roof of its own. It shows with the Roof view, which this turns on 🏠',
   pool: 'Drag to dig a pool or spa, any shape you like, or Ctrl-drag to fill it back in. Pick a ladder, pool stairs or a diving board below to put one in 🏊',
   pillar: 'Click a corner to put up a pillar. It holds up the floor above for 2 squares round it. Ctrl-click takes one down 🏛️',
-  fence: 'Drag along the grid lines to put up a fence or railing. Upstairs, railings go along the edges of tiles. Gate turns a length of fence into a gate 🪵',
+  fence: 'Drag along the grid lines to put up a fence or railing. Click a fence to change it to the picked style. Upstairs, railings go along the edges of tiles. Gate turns a length of fence into a gate 🪵',
   outdoor: 'Pick a tree, plant or garden piece, then click a tile to place it. R turns it 🌳',
   stairs: 'Pick a kind of stairs, then click to place them. They climb to the floor above and leave a hole in it. R turns them. Page Up and Page Down change floors 🪜',
-  furniture: 'Pick a piece and click a tile to place it. Hold and drag to turn it before you let go, or press R, which also turns whatever piece you point at 🪑',
+  furniture: 'Pick a piece and click a tile to place it. Hold and drag to turn it before you let go, or press R, which also turns whatever piece you point at. Alt/Option-click a placed piece to pick up more of it 🪑',
   move: 'Click a piece to pick it up, then click where it should go. R turns it, Esc puts it back ✋',
-  delete: 'Drag across an area to erase it, or click one thing 🗑️',
+  delete: 'Drag across an area to erase it, or click one thing, like a single railing upstairs 🗑️',
 };
 
 const toolController = new ToolController(model, () => cameraRig.getCamera(), canvas, previewRenderer, ground.walls.group);
@@ -288,11 +292,13 @@ function selectTool(tool: ToolId) {
   // The Pool tool digs, or with an item picked from its row, places that like furniture.
   toolController.activeTool = tool === 'stairs' || tool === 'outdoor' || (tool === 'pool' && poolItem) ? 'furniture' : tool;
   inLive = tool === 'none';
+  updateCutaway();
   if (tool === 'stairs') toolController.selectedFurnitureType = stairsType;
   else if (tool === 'outdoor') toolController.selectedFurnitureType = outdoorType;
   else if (tool === 'pool' && poolItem) toolController.selectedFurnitureType = poolItem;
   else if (tool === 'furniture' && (heldByBuildTool || isStairs(toolController.selectedFurnitureType ?? ''))) toolController.selectedFurnitureType = paletteFurniture;
   toolController.resetPreview();
+  if (tool !== 'furniture') toolController.furniturePicking = false;
   hintEl.textContent = HINTS[tool];
   pawnPanel.setEditable(tool === 'none');
   household.setWandering(tool === 'none');
@@ -351,7 +357,9 @@ canvas.addEventListener('pointerleave', () => {
 // selected pawn to use the furniture it landed on, or sends it there. ---
 const WALK_CLICK_MAX_PIXELS = 5;
 let spaceHeld = false;
-let panDrag: { x: number; y: number; startX: number; startY: number; button: number } | null = null;
+let panDrag: { x: number; y: number; startX: number; startY: number; button: number; orbit?: boolean } | null = null;
+/** When a 3D orbit last moved which walls are cut away. */
+let orbitCutawayAt = 0;
 
 /** What can hide a pawn from a click: the walls and the furniture. */
 // With Select everything on, the Delete tool can take messes on the floor you're on too.
@@ -398,21 +406,45 @@ canvas.addEventListener(
     e.preventDefault();
     e.stopImmediatePropagation();
     canvas.setPointerCapture(e.pointerId);
-    panDrag = { x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY, button: e.button };
+    // In 3D, a middle-drag, or Shift and a right-drag, turns and tilts the camera instead of moving it.
+    const orbit = cameraRig.isPerspective && (e.button === 1 || (e.button === 2 && e.shiftKey));
+    panDrag = { x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY, button: e.button, orbit };
     canvas.style.cursor = 'grabbing';
   },
   { capture: true },
 );
 window.addEventListener('pointermove', (e) => {
   if (!panDrag) return;
-  cameraRig.panByPixels(e.clientX - panDrag.x, e.clientY - panDrag.y, canvas.clientHeight);
+  if (panDrag.orbit) {
+    cameraRig.orbit(-(e.clientX - panDrag.x) * 0.35, (e.clientY - panDrag.y) * 0.25);
+    // Which walls face the camera changes as it turns.
+    if (performance.now() - orbitCutawayAt > 120) {
+      orbitCutawayAt = performance.now();
+      updateCutaway();
+    }
+  } else cameraRig.panByPixels(e.clientX - panDrag.x, e.clientY - panDrag.y, canvas.clientHeight);
   panDrag.x = e.clientX;
   panDrag.y = e.clientY;
 });
 const pieMenu = createPieMenu();
 household.onSelectionChange = () => updatePawnPanel();
 
+// Upstairs, the railings drawn for you on the floor you're on, so one can be deleted, painted or restyled.
+toolController.autoRailings = () => house.autoRailingEdges(activeLevel);
+
+// The Furniture tool's eyedropper: a placed piece clicked with it, or Alt/Option-clicked, goes in hand to place more.
+toolController.onFurniturePicked = (piece) => {
+  toolbar.pickUpPiece(piece.type, piece.color);
+  hintEl.textContent = `💧 Picked up ${getFurnitureDef(piece.type).label}. Click to place more`;
+};
+
 window.addEventListener('pointerup', (e) => {
+  if (panDrag?.orbit) {
+    panDrag = null;
+    canvas.style.cursor = '';
+    updateCutaway();
+    return;
+  }
   const isWalkButton = panDrag?.button === 0 || panDrag?.button === 2;
   // The click that closed a menu was only for closing it.
   const dismissedMenu = pieMenu.takeDismissal();
@@ -633,6 +665,11 @@ const toolbar = createBuildToolbar(toolbarEl, {
     toolController.selectedFurnitureType = type;
     paletteFurniture = type;
   },
+  onFurniturePicking: (on) => {
+    toolController.furniturePicking = on;
+    toolController.resetPreview();
+    hintEl.textContent = on ? '💧 Click a placed piece to pick up that kind, in its color, to place more. Esc to stop' : HINTS[menuTool];
+  },
   onPaintColor: (color) => {
     toolController.selectedPaintColor = color;
   },
@@ -655,6 +692,11 @@ const toolbar = createBuildToolbar(toolbarEl, {
   },
   onDoorStyle: (style) => {
     toolController.selectedDoorStyle = style;
+  },
+  onStairsFinish: (color) => {
+    // Every kind of stairs goes down in the same finish.
+    for (const def of STAIR_DEFS) toolController.furnitureColors.set(def.type, color);
+    toolController.resetPreview();
   },
   onStairsType: (type) => {
     stairsType = type;
@@ -679,6 +721,15 @@ const toolbar = createBuildToolbar(toolbarEl, {
   },
   onRoofStyle: (style) => {
     house.setRoofStyle(style);
+    editHistory.commit();
+  },
+  onRoofForRoom: (style) => {
+    toolController.roofForRoom = style;
+    toolController.resetPreview();
+    hintEl.textContent = style === undefined ? HINTS.roof : style === null ? "↩️ Click a room to give it back the house's roof. Click House roof again to put every room back" : `🖱️ Click a room to give it a ${style} roof`;
+  },
+  onRoofAreasReset: () => {
+    for (const model of house.levels) model.clearRoofAreas();
     editHistory.commit();
   },
   onRoofCovering: (covering) => {
@@ -717,10 +768,20 @@ const toolbar = createBuildToolbar(toolbarEl, {
   },
 }, { layout: UI_LAYOUT });
 
+/**
+ * The free 3D camera (🎥 in the camera cross, or V) is paused as a work in
+ * progress: it's all there in the camera rig, but hidden until this is true.
+ */
+const CAMERA_3D = false;
+
 const viewControls = createViewControls(viewControlsEl, {
   onShowStatuses: (visible) => {
     showStatusesWhileEditing = visible;
     updateNeedsPanelVisibility();
+  },
+  onCamera3D: (on) => {
+    cameraRig.setPerspective(on);
+    updateCutaway();
   },
   onRotateCamera: (dir) => {
     if (dir === 'cw') cameraRig.rotateCW();
@@ -743,7 +804,7 @@ const viewControls = createViewControls(viewControlsEl, {
   onLevel: (direction) => goToLevel(activeLevel + (direction === 'up' ? 1 : -1)),
   onCenterCamera: () => centerCamera(),
   onWallViewMode: setWallViewMode,
-}, { layout: UI_LAYOUT });
+}, { layout: UI_LAYOUT, camera3D: CAMERA_3D });
 
 editHistory.onChange = () => {
   toolbar.setHistoryState(editHistory.canUndo, editHistory.canRedo);
@@ -757,6 +818,8 @@ const fileControls = createFileControls(fileControlsEl, {
   onOpen: openSavedHouse,
   onNew: startNewHouse,
   onHome: () => showStartScreen(),
+  onExport: exportCurrentHouse,
+  onImport: importHouseFile,
   onRename: (id, name) => {
     const result = renameHouse(id, name);
     if (!result.ok) fileControls.showMessage(`⚠️ Couldn't rename it: ${result.reason}.`, 'error');
@@ -848,6 +911,40 @@ function startNewHouse(start: NewHouseStart) {
   );
 }
 
+/** Saves the house you're in, and its household, as a file the browser downloads. */
+function exportCurrentHouse() {
+  const name = currentHouse()?.name ?? 'My house';
+  const text = exportHouse(name, house, household.snapshot());
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  link.download = `${name.replace(/[^a-z0-9 _-]+/gi, '').trim() || 'house'}.tiny-tenants.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  fileControls.showMessage(`📤 Exported ${name}`, 'ok');
+}
+
+/** Opens a house file as a new house, with the people who live in it. */
+function importHouseFile(file: File) {
+  void file.text().then((text) => {
+    let message = '';
+    switchHouse(
+      () => {
+        const result = importHouse(text, house);
+        if (!result.ok) {
+          message = `⚠️ Couldn't import it: ${result.reason}. You're still in the house you were in.`;
+          return false;
+        }
+        household.moveIn(result.household);
+        message = `📥 Imported ${result.name}`;
+        return true;
+      },
+      '',
+      '',
+    );
+    if (message) fileControls.showMessage(message, message.startsWith('⚠️') ? 'error' : 'ok');
+  });
+}
+
 /**
  * Leaves the house you're in for another: saves it first, so nothing built
  * there is lost, then puts the pawns out front of the new one, with nothing
@@ -883,12 +980,12 @@ fileControls.setLastSaved(lastSavedAt());
     houseChanged = true;
     // Undo, or opening another house, can change the roof and railings too.
     toolbar.setActiveRoofStyle(house.roofStyle);
-    toolbar.setActiveRoofCovering({ material: house.roofMaterial, flat: house.flatRoof });
+    toolbar.setActiveRoofCovering({ material: house.roofMaterial, flat: house.flatRoof, pitch: house.roofPitch, color: house.roofColor });
     syncFenceButtons();
   };
 }
 toolbar.setActiveRoofStyle(house.roofStyle);
-toolbar.setActiveRoofCovering({ material: house.roofMaterial, flat: house.flatRoof });
+toolbar.setActiveRoofCovering({ material: house.roofMaterial, flat: house.flatRoof, pitch: house.roofPitch, color: house.roofColor });
 toolbar.setActiveStairs(stairsType);
 toolbar.setActiveOutdoor(outdoorType);
 syncFenceButtons();
@@ -1133,7 +1230,22 @@ window.addEventListener('keydown', (e) => {
       // Enter on a focused button presses that button instead.
       if (target?.tagName !== 'BUTTON') focusOnPawn(household.selected);
       break;
+    case 'v':
+    case 'V': {
+      // The free 3D camera, on and off, once it's ready.
+      if (!CAMERA_3D) break;
+      const on = !cameraRig.isPerspective;
+      cameraRig.setPerspective(on);
+      viewControls.setCamera3D(on);
+      updateCutaway();
+      break;
+    }
     case 'Escape':
+      if (toolController.furniturePicking) {
+        toolController.furniturePicking = false;
+        toolbar.setFurniturePicking(false);
+        hintEl.textContent = HINTS[menuTool];
+      }
       toolController.cancelDrag();
       toolController.putBackCarried();
       if (toolController.dropHeldPiece()) toolbar.setActiveFurniture(null);
@@ -1145,7 +1257,7 @@ rebuildAll();
 
 // For checking the game from a test tab while developing. Left out of real builds.
 if (import.meta.env.DEV) {
-  Object.assign(window, { __game: { house, views, household, toolController, editHistory, goToLevel, cameraRig, get activeLevel() { return activeLevel; } } });
+  Object.assign(window, { __game: { house, views, household, toolController, editHistory, goToLevel, cameraRig, get dayClock() { return dayClock; }, get activeLevel() { return activeLevel; } } });
 }
 
 // The start screen the game opens on, with the house turning slowly behind it.
@@ -1158,6 +1270,7 @@ const startScreen = createStartScreen(document.getElementById('app')!, {
   onContinue: () => {},
   onOpen: openSavedHouse,
   onNew: startNewHouse,
+  onImport: importHouseFile,
   onShownChange: (shown) => {
     startScreenShown = shown;
     document.body.classList.toggle('at-start', shown);
@@ -1174,7 +1287,104 @@ function showStartScreen() {
 }
 startScreen.show();
 
+// --- Day and night ---
+/** Where the time of day is kept between visits. */
+const TIME_KEY = 'tiny-tenants-time-of-day';
+const DAY_KEY = 'tiny-tenants-day';
+const dayClock = new DayClock(readSavedTime(), readSavedDay());
+function readSavedDay(): number {
+  try {
+    return Number(localStorage.getItem(DAY_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+function readSavedTime(): number | undefined {
+  try {
+    const saved = Number(localStorage.getItem(TIME_KEY));
+    return localStorage.getItem(TIME_KEY) !== null && Number.isFinite(saved) ? saved : undefined;
+  } catch {
+    return undefined;
+  }
+}
+function saveTime() {
+  try {
+    localStorage.setItem(TIME_KEY, String(Math.round(dayClock.minutes)));
+    localStorage.setItem(DAY_KEY, String(dayClock.day));
+  } catch {
+    // Only the time of day would be lost.
+  }
+}
+window.setInterval(saveTime, 10_000);
+window.addEventListener('pagehide', saveTime);
+
+// The clock, top left: the time, and a button that makes the day go by faster.
+const clockEl = document.createElement('div');
+clockEl.className = 'day-clock';
+const clockIcon = document.createElement('span');
+clockIcon.className = 'day-clock-icon';
+const clockTime = document.createElement('span');
+clockTime.className = 'day-clock-time';
+const clockSpeed = document.createElement('button');
+clockSpeed.className = 'day-clock-speed';
+clockSpeed.title = 'How fast the day goes by: click for faster';
+clockSpeed.onclick = () => {
+  dayClock.faster();
+  showClock();
+};
+clockEl.append(clockIcon, clockTime, clockSpeed);
+document.getElementById('app')!.appendChild(clockEl);
+let shownClockLabel = '';
+function showClock() {
+  const label = dayClock.label;
+  if (label !== shownClockLabel) {
+    shownClockLabel = label;
+    clockTime.textContent = label;
+    clockIcon.textContent = dayClock.icon;
+  }
+  clockSpeed.textContent = `${dayClock.speed}×`;
+}
+showClock();
+
+const skyLight = scene.getObjectByName('sky') as THREE.HemisphereLight;
+const sunLight = scene.getObjectByName('sun') as THREE.DirectionalLight;
+const SKY_DAY = new THREE.Color(0xbfe3f0);
+const SKY_DUSK = new THREE.Color(0xf2b48a);
+const SKY_NIGHT = new THREE.Color(0x1b2340);
+const SUN_DAY = new THREE.Color(0xffffff);
+const SUN_LOW = new THREE.Color(0xffb36b);
+const MOON = new THREE.Color(0x8fa3d6);
+const AMBIENT_DAY = new THREE.Color(0xffffff);
+const AMBIENT_NIGHT = new THREE.Color(0x5d6fa8);
+const sky = new THREE.Color();
+
+/** Lights the lot for the time of day: the sun's angle and color, the sky, the ambient light, daylight through windows and how much lamps show. */
+function applyTimeOfDay() {
+  const daylight = dayClock.daylight;
+  const golden = dayClock.goldenHour;
+  const night = dayClock.nightfall;
+  // The sun rises in the east and sets in the west; at night a dim moon stands in for it.
+  const across = Math.PI * Math.min(1, Math.max(0, dayClock.sunProgress));
+  const height = Math.max(0.25, dayClock.sunHeight);
+  if (daylight > 0.02) sunLight.position.set(Math.cos(across) * 10, height * 12, 4 + Math.sin(across) * 2);
+  else sunLight.position.set(-4, 10, 6);
+  sunLight.color.copy(SUN_DAY).lerp(SUN_LOW, golden).lerp(MOON, night);
+  sunLight.intensity = 0.25 + 1.15 * daylight;
+  skyLight.color.copy(AMBIENT_DAY).lerp(AMBIENT_NIGHT, night);
+  skyLight.intensity = 0.4 + 0.7 * daylight;
+  sky.copy(SKY_NIGHT).lerp(SKY_DAY, daylight).lerp(SKY_DUSK, golden * 0.8);
+  (scene.background as THREE.Color).copy(sky);
+  for (const view of views) {
+    view.sunlight.setDaylight(daylight);
+    view.lights.setNight(night);
+  }
+}
+
 let lastFrameTime = performance.now();
+
+/** How often to check which pawns are hidden behind a wall, in milliseconds. */
+const SILHOUETTE_CHECK_MS = 120;
+let silhouettesCheckedAt = 0;
 
 function animate(now = performance.now()) {
   requestAnimationFrame(animate);
@@ -1193,7 +1403,18 @@ function animate(now = performance.now()) {
     showcaseCutawayAt = now;
     updateCutaway();
   }
-  if (!paused) household.update(seconds);
+  if (!paused) {
+    household.update(seconds);
+    dayClock.update(seconds);
+  }
+  showClock();
+  applyTimeOfDay();
+  if (now - silhouettesCheckedAt > SILHOUETTE_CHECK_MS) {
+    silhouettesCheckedAt = now;
+    household.updateSilhouettes(camera, (level) =>
+      views.flatMap((view, index) => (view.group.visible ? [...(index >= level ? [view.walls.group] : []), ...(roofShown ? [view.roof.group] : [])] : [])),
+    );
+  }
   if (pathOverlay.visible) pathOverlay.update(household.routes(), now / 1000);
   const inUse = household.piecesInUse();
   for (const view of views) {
@@ -1206,6 +1427,7 @@ function animate(now = performance.now()) {
   views.forEach((view, level) => {
     const pawns = household.pawnPositions(level);
     view.walls.animateDoors(seconds, pawns);
+    view.walls.animateFade(seconds, pawns);
     view.fences.animateGates(seconds, pawns);
   });
   // Needs change slowly, so there's no call to touch the page every frame.

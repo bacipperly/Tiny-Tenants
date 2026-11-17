@@ -7,6 +7,7 @@ import type { Advertisement } from './needs';
 import { cellsWithinWalk } from './pathfinding';
 import type { Cell } from './pathfinding';
 import { FLOOR_CHANGE_STEPS, placeKey } from './world';
+import { nightfall } from './dayClock';
 import type { LevelPiece as FurniturePiece, World } from './world';
 import type { Pawn } from './pawn';
 import { PERSONALITY_TRAITS, TRAITS, traitsOf } from './personality';
@@ -175,6 +176,8 @@ export class Wanderer {
     if (due === undefined) {
       this.leaveFurnitureAt.set(pawn, this.clock + this.between(USE_SECONDS[pawn.settledUse!]));
     } else if ((this.clock >= due || pawn.isSatisfiedByFurniture) && !this.isTalking(pawn)) {
+      // Asleep in bed at night, it stays there until morning.
+      if (pawn.settledUse === 'lie' && nightfall() > 0.5) return;
       this.leaveFurnitureAt.delete(pawn);
       pawn.finishUsingFurniture();
     }

@@ -21,12 +21,19 @@ export type RoofStyle = 'flat' | 'hip' | 'gable';
 export type RoofMaterial = 'slate' | 'asphalt' | 'clay' | 'shakes' | 'metal' | 'thatch';
 /** What a flat roof is finished with. */
 export type FlatRoofFinish = 'gravel' | 'membrane' | 'green';
+/** How steep a pitched roof is. */
+export type RoofPitch = 'low' | 'medium' | 'steep';
 /** Everything about how the roof looks, the same on every floor. */
 export interface RoofLook {
   style: RoofStyle;
   material: RoofMaterial;
   flat: FlatRoofFinish;
+  pitch: RoofPitch;
+  /** A color the covering is tinted, or unset for its own colors. */
+  color?: string;
 }
+/** A change to the roof's covering: any of what it's made of, how steep, and its color (null for its own colors). */
+export type RoofCovering = { material?: RoofMaterial; flat?: FlatRoofFinish; pitch?: RoofPitch; color?: string | null };
 
 /** A house saved with its floors, ground floor first. */
 export interface HouseData {
@@ -38,6 +45,10 @@ export interface HouseData {
   roofMaterial?: RoofMaterial;
   /** Gravel if left out. */
   flatRoof?: FlatRoofFinish;
+  /** Medium if left out, as every pitched roof was before there was a choice. */
+  roofPitch?: RoofPitch;
+  /** The roof's tint; left out for the covering's own colors. */
+  roofColor?: string;
   /** Railings drawn round every open upstairs edge and stairwell. On if left out. */
   autoRailings?: boolean;
   /** The style auto-railings are drawn in. Wooden if left out. */
@@ -129,6 +140,8 @@ export class House {
   roofStyle: RoofStyle = 'flat';
   roofMaterial: RoofMaterial = 'slate';
   flatRoof: FlatRoofFinish = 'gravel';
+  roofPitch: RoofPitch = 'medium';
+  roofColor: string | undefined = undefined;
   /** Railings round every open upstairs edge and stairwell, drawn for you. */
   autoRailings = true;
   railingStyle: FenceStyle = 'wood-rail';
@@ -235,23 +248,28 @@ export class House {
   }
 
   /** What pitched roofs are covered in, or what flat ones are finished with. */
-  setRoofCovering(covering: { material?: RoofMaterial; flat?: FlatRoofFinish }) {
+  setRoofCovering(covering: RoofCovering) {
     const material = covering.material ?? this.roofMaterial;
     const flat = covering.flat ?? this.flatRoof;
-    if (material === this.roofMaterial && flat === this.flatRoof) return;
+    const pitch = covering.pitch ?? this.roofPitch;
+    const color = covering.color === undefined ? this.roofColor : covering.color ?? undefined;
+    if (material === this.roofMaterial && flat === this.flatRoof && pitch === this.roofPitch && color === this.roofColor) return;
     this.roofMaterial = material;
     this.flatRoof = flat;
+    this.roofPitch = pitch;
+    this.roofColor = color;
     this.onChange?.(-1);
   }
 
   get roofLook(): RoofLook {
-    return { style: this.roofStyle, material: this.roofMaterial, flat: this.flatRoof };
+    return { style: this.roofStyle, material: this.roofMaterial, flat: this.flatRoof, pitch: this.roofPitch, ...(this.roofColor && { color: this.roofColor }) };
   }
 
   /**
    * The edges upstairs that get a railing drawn for you: every edge of a tile
    * that drops away, to nothing or down a stairwell, with no wall or fence of
-   * its own, except where stairs come up onto the floor.
+   * its own, except where stairs come up onto the floor, or where that one
+   * railing has been deleted.
    */
   autoRailingEdges(level: number): { x: number; z: number; dir: Direction; style: FenceStyle }[] {
     const model = this.levels[level];
@@ -275,7 +293,7 @@ export class House {
       const style = rail ?? 'none';
       if (style === 'none' || !standsOn(x, z)) continue;
       for (const { dx, dz, dir } of STEPS) {
-        if (standsOn(x + dx, z + dz) || model.hasWall(x, z, dir) || model.hasFence(x, z, dir) || openings.has(wallKey(x, z, dir))) continue;
+        if (standsOn(x + dx, z + dz) || model.hasWall(x, z, dir) || model.hasFence(x, z, dir) || model.hasRailGap(x, z, dir) || openings.has(wallKey(x, z, dir))) continue;
         edges.push({ x, z, dir, style });
       }
     }
@@ -298,6 +316,8 @@ export class House {
       ...(this.roofStyle !== 'flat' && { roof: this.roofStyle }),
       ...(this.roofMaterial !== 'slate' && { roofMaterial: this.roofMaterial }),
       ...(this.flatRoof !== 'gravel' && { flatRoof: this.flatRoof }),
+      ...(this.roofPitch !== 'medium' && { roofPitch: this.roofPitch }),
+      ...(this.roofColor && { roofColor: this.roofColor }),
       ...(!this.autoRailings && { autoRailings: false }),
       ...(this.railingStyle !== 'wood-rail' && { railingStyle: this.railingStyle }),
     };
@@ -309,6 +329,8 @@ export class House {
     this.roofStyle = data.roof ?? 'flat';
     this.roofMaterial = data.roofMaterial ?? 'slate';
     this.flatRoof = data.flatRoof ?? 'gravel';
+    this.roofPitch = data.roofPitch ?? 'medium';
+    this.roofColor = data.roofColor;
     this.autoRailings = data.autoRailings ?? true;
     this.railingStyle = data.railingStyle ?? 'wood-rail';
     try {
@@ -332,6 +354,8 @@ export class House {
     this.roofStyle = 'flat';
     this.roofMaterial = 'slate';
     this.flatRoof = 'gravel';
+    this.roofPitch = 'medium';
+    this.roofColor = undefined;
     this.autoRailings = true;
     this.railingStyle = 'wood-rail';
     this.quiet = true;
