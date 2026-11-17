@@ -111,17 +111,17 @@ or new ideas come up — it travels with the repo instead of living in a chat.
 - [x] Pitched roofs: a 🏠 Roof tool in Build picks flat, hip or gable for the whole house. Hip and gable roofs follow any shape (L-shapes get valleys). Gables give each wing of an L, T or U its own ridge, running out from the main block, and wall in their ends. Pitched roofs have eaves, and each slope is shaded by which way it faces. Pitched roofs are shingled, in rows that run level along each slope; flat roofs have a gravel finish. Saved with the house and undoable
 - [x] A start screen the game opens on, titled Tiny Tenants, with the house you were in turning slowly behind it: Continue (or Move in the first time), a new Starter house, Garden lot or Empty lot, and your other saved houses. Enter plays, and the 📁 menu has a way back to it. The game is also published on GitHub Pages
 - [x] Each house has its own household: its own people, how they get along, and the mess they leave. Switching houses leaves the last one as it was. A Starter house or Empty lot starts with a couple, the Garden lot with the big household, and a copy brings everyone along. A house saved before this keeps the people it had. The start screen and 📁 menu show how many people live in each house
+- [x] Roads: an Asphalt floor, and Road line (a dashed yellow center line) and Double line (two solid yellow lines) floors laid down the middle of a road. A line runs on into the line tiles beside it, or along the asphalt when it is on its own, and where lines meet from both ways it leaves bare asphalt for the crossing. A Crosswalk floor of white zebra stripes, laid in a row across a road, with its stripes running the way the traffic does
+- [x] Lively tenants: gummy bean bodies with floppy mitten arms and stubby legs on springs, so they waddle, lurch, wobble, squash on landing and now and then trip over nothing; a face whose mouth shows their mood; arms that stir, chop, mop, type and wave; and an outline when they're behind a wall. Roughhousing from the right-click menu (Toss, Shove, Wrestle, and a Bear hug that lifts them off their feet): thrown tenants tumble through the air, bounce and lie seeing stars before wobbling back up. Friends and playful tenants love it, rivals and grouches don't, and a bored playful tenant sometimes starts a play-fight on its own
 
 ## Next
 - More speed if needed: merge walls further, rebuild walls and floors only where they changed
 - Eyedropper for furniture: click a placed piece to pick up that kind to place again
-- Floor textures to paint with (wood, tile, carpet, stone) and patterns, not just colors
+- Export and import a house, to carry it from one browser or computer to another (each browser keeps its own saves)
 
 ## Later
-- Each house with its own household, rather than the same pawns in every house
 - Day and night: the sun moves, evenings get dark so lamps matter, and pawns go to bed at night (they already sleep in beds when they're tired)
-- Roof per area rather than one style for the whole house, a choice of pitch and roof color or material
-- Pawn polish: a walk animation, and a silhouette when a pawn is behind a wall
+- Roof per area rather than one style for the whole house, a choice of pitch, and roof color (the coverings are in)
 - Half walls (waist-high, can hold a countertop, don't split a room) and hedges that grow in over a few days
 - Fence polish: painting fences, changing a fence's style by clicking it, and removing a single auto-railing
 - Pawns passing each other on the stairs rather than waiting their turn, and stair materials (stone, painted, carpet runner)

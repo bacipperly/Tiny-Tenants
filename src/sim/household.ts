@@ -9,6 +9,8 @@ import type { NeedsPanelView } from '../ui/needsPanel';
 import { Chatter } from './chatter';
 import { Chores } from './chores';
 import { Swimming } from './swimming';
+import { Roughhousing } from './roughhousing';
+import type { RoughKind } from './roughhousing';
 import { Messes, messCell } from './messes';
 import { Privacy } from './privacy';
 import { findFurnitureSpot } from './furnitureUse';
@@ -49,6 +51,11 @@ const STANDER_NUDGE_LIMIT = 0.27;
 /** A door opening is narrow, so a pawn crossing one barely drifts. */
 const SIDESTEP_DISTANCE_IN_DOOR = 0.08;
 
+/** A playful tenant only picks a play-fight when its Fun is below this, only some of the times it's choosing what to do, and only with a friend this many squares away or nearer. */
+const PLAY_FIGHT_BELOW_FUN = 45;
+const PLAY_FIGHT_CHANCE = 0.25;
+const PLAY_FIGHT_REACH = 8;
+
 /**
  * Everyone living on the lot, and which of them the mouse is commanding. Who
  * they are is remembered as soon as it changes, separately from the house, so
@@ -71,6 +78,8 @@ export class Household {
   private chores!: Chores;
   /** Swimming, soaking and sitting at the edge of the pool. */
   swimming!: Swimming;
+  /** Tossing, shoving, wrestling and bear hugs. */
+  private roughhousing!: Roughhousing;
   private privacy!: Privacy;
   /** Pawns you've sent to switch something on or off, like lighting the fire. */
   private switching = new Map<Pawn, { pieceId: string; turnOn: boolean; secondsLeft: number }>();
@@ -139,6 +148,7 @@ export class Household {
     this.chores.isOffLimits = (pawn, cell) => this.privacy.isOffLimits(pawn, cell);
     this.swimming = new Swimming(model);
     this.swimming.onSplash = (x, z, size) => this.onSplash?.(x, z, size);
+    this.roughhousing = new Roughhousing(model, this.relationships, (pawn) => this.pawnCells(pawn), (actor, target, kind) => this.sendOver(actor, target, kind));
     this.meals = new Meals(model, (pawn, piece) => this.findSpotByChoice(pawn, piece), {
       cooked: (pawn, source) => this.chores.cooked(pawn, source),
       leftDishes: (pawn, onTable) => this.chores.leftDishes(pawn, onTable),
@@ -147,10 +157,12 @@ export class Household {
       model,
       this.relationships,
       (pawn) => this.chatter.isTalking(pawn),
-      (pawn) => this.meals.isHavingMeal(pawn) || this.chores.isBusy(pawn) || this.swimming.isBusy(pawn) || this.switching.has(pawn) || this.socials.has(pawn),
+      (pawn) =>
+        this.meals.isHavingMeal(pawn) || this.chores.isBusy(pawn) || this.swimming.isBusy(pawn) || this.roughhousing.isBusy(pawn) || this.switching.has(pawn) || this.socials.has(pawn),
       (pawn) => this.pawnCells(pawn),
       (pawn, piece) => this.findSpotByChoice(pawn, piece),
-      (pawn, minimum) => (this.meals.isHavingMeal(pawn) ? [] : [...this.chores.options(pawn, minimum), ...this.swimming.options(pawn, minimum)]),
+      (pawn, minimum) =>
+        this.meals.isHavingMeal(pawn) ? [] : [...this.chores.options(pawn, minimum), ...this.swimming.options(pawn, minimum), ...this.playFightOptions(pawn, minimum)],
       (pawn, cell) => this.privacy.isOffLimits(pawn, cell),
     );
     for (const info of saved?.pawns ?? [{ id: 'p1', name: 'Pawn 1', color: NEW_PAWN_COLORS[0] }]) this.addPawn({ ...info, ...completeTraits(info) });
@@ -360,6 +372,7 @@ export class Household {
       },
       clean: (messId) => this.cleanWithSelected(messId),
       social: (target, kind) => this.socialWithSelected(target, kind),
+      roughBlocked: (pawn, target) => this.roughhousing.blockedReason(pawn, target),
       gesture: (gesture, emoji) => {
         const pawn = this.selectedPawn();
         if (!pawn) return;
@@ -380,7 +393,7 @@ export class Household {
     if (kind === 'wave') {
       const rivals = this.relationships.areRivals(actor.info.id, target.info.id);
       actor.faceToward(target.currentCell());
-      actor.playGesture('wiggle');
+      actor.playGesture('wave');
       actor.say('👋', 1.6);
       target.faceToward(actor.currentCell());
       target.say(rivals ? '🙄' : '👋', 1.6);
@@ -456,8 +469,12 @@ export class Household {
 
   /** The exchange itself, and how it's likely to go: jokes land with playful pawns and fall flat with grouchy ones, and an argument always ends badly. */
   private startSocial(actor: Pawn, target: Pawn, kind: SocialKind) {
+    if (kind === 'toss' || kind === 'shove' || kind === 'wrestle') {
+      if (!this.roughhousing.start(actor, target, kind)) actor.think('🤷', 1.6);
+      return;
+    }
     const fit = compatibility(actor.info, target.info);
-    const scripts: Record<Exclude<SocialKind, 'wave'>, { lines: string[]; outcome?: ChatOutcome }> = {
+    const scripts: Record<Exclude<SocialKind, 'wave' | RoughKind>, { lines: string[]; outcome?: ChatOutcome }> = {
       chat: { lines: this.chatter.randomTopic(4) },
       joke: {
         lines: ['😏', '🤔', '🤡'],
@@ -477,7 +494,39 @@ export class Household {
     if (kind === 'wave') return;
     const { lines, outcome } = scripts[kind];
     this.chatter.startWith(actor, target, lines, outcome);
+    // A hug's a proper bear hug, lifting them off their feet, when they're standing about.
+    if (kind === 'hug') this.roughhousing.start(actor, target, 'bearhug');
   }
+
+  /** Sends one tenant over to another to roughhouse, like a grouch going back to shove whoever threw it. */
+  private sendOver(actor: Pawn, target: Pawn, kind: RoughKind) {
+    if (kind === 'bearhug' || !this.pawns.includes(actor) || !this.pawns.includes(target)) return;
+    const job = { target, kind: kind as SocialKind, spot: null as Cell | null, tries: 0 };
+    this.socials.set(actor, job);
+    if (!this.isNear(actor, target)) this.headOver(actor, job);
+  }
+
+  /**
+   * Now and then, a playful tenant who's bored picks a play-fight with a
+   * friend nearby: a toss, a shove or a wrestle. Rare, so the house doesn't
+   * turn into a brawl.
+   */
+  private playFightOptions(pawn: Pawn, minimum: number): { utility: number; act: () => boolean }[] {
+    if (pawn.info.temperament !== 'playful' || pawn.mind.needs.fun > PLAY_FIGHT_BELOW_FUN || Math.random() > PLAY_FIGHT_CHANCE) return [];
+    const here = pawn.currentCell();
+    const friends = this.pawns.filter((other) => {
+      if (other === pawn || !this.relationships.areFriends(pawn.info.id, other.info.id)) return false;
+      const there = other.currentCell();
+      return there.level === here.level && Math.hypot(there.x - here.x, there.z - here.z) <= PLAY_FIGHT_REACH && !this.roughhousing.blockedReason(pawn, other) && (!other.isWalking || other.isStrolling);
+    });
+    if (friends.length === 0) return [];
+    const utility = pawn.mind.utilityOf({ fun: 40 }) * 0.7;
+    if (utility < minimum) return [];
+    const friend = friends[Math.floor(Math.random() * friends.length)];
+    const kinds: RoughKind[] = ['toss', 'shove', 'wrestle'];
+    return [{ utility, act: () => (this.sendOver(pawn, friend, kinds[Math.floor(Math.random() * kinds.length)]), true) }];
+  }
+
 
   /** Sends the selected pawn to switch something on or off, like lighting the fire. It walks over, takes a moment, and then it's done. Lighting a fire, it stays to warm up. */
   switchWithSelected(piece: LevelPiece, turnOn: boolean) {

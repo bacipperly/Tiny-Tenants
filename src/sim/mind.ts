@@ -61,6 +61,11 @@ export class Mind {
     this.buff = { id, until: this.clock + seconds };
   }
 
+  /** The mood that's come over it, if any. */
+  get buffId(): BuffId | null {
+    return this.buff?.id ?? null;
+  }
+
   hasBuff(id: BuffId): boolean {
     return this.buff?.id === id;
   }

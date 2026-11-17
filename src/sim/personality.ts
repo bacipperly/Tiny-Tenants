@@ -11,7 +11,7 @@ export interface PawnTraits {
   tidiness: Tidiness;
 }
 
-export type Gesture = 'hop' | 'spin' | 'wiggle' | 'bow' | 'slump' | 'stomp';
+export type Gesture = 'hop' | 'spin' | 'wiggle' | 'bow' | 'slump' | 'stomp' | 'wave';
 export type BuffId = 'cranky' | 'giddy' | 'happy' | 'sad' | 'embarrassed';
 
 type Range = { min: number; max: number };

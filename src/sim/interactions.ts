@@ -25,7 +25,7 @@ export interface InteractionMenu {
   items: Interaction[];
 }
 
-export type SocialKind = 'chat' | 'joke' | 'compliment' | 'gossip' | 'hug' | 'argue' | 'wave';
+export type SocialKind = 'chat' | 'joke' | 'compliment' | 'gossip' | 'hug' | 'argue' | 'wave' | 'toss' | 'shove' | 'wrestle';
 
 /** What the menus need from the household: who's who, what can be reached, and how to set things going. */
 export interface InteractionContext {
@@ -40,6 +40,8 @@ export interface InteractionContext {
   areRivals(a: Pawn, b: Pawn): boolean;
   /** Why the selected pawn can't get to another pawn, or null if it can. */
   reachBlocked(pawn: Pawn, target: Pawn): string | null;
+  /** Why the selected pawn can't roughhouse with another right now, like them being in bed, or null if it can. */
+  roughBlocked(pawn: Pawn, target: Pawn): string | null;
   /** Why the selected pawn can't walk to a square, or null if it can. */
   walkBlocked(pawn: Pawn, cell: Cell): string | null;
   walk(cell: Cell): void;
@@ -325,7 +327,19 @@ export function pawnMenu(context: InteractionContext, target: Pawn): Interaction
   ];
   if (!rivals) talk.push(social('gossip', 'Gossip', '🤫', friends ? undefined : 'Only friends share gossip'));
   const items: Interaction[] = [{ label: 'Talk', emoji: '💬', children: talk, disabled: reach }];
-  if (!rivals) items.push(social('hug', 'Hug', '🤗', friends ? undefined : 'Not close enough for a hug yet'));
+  if (!rivals) items.push(social('hug', 'Bear hug', '🤗', friends ? undefined : 'Not close enough for a hug yet'));
+  // Throwing each other about: great fun between friends, and a good way to make an enemy.
+  const rough = reach ?? context.roughBlocked(actor, target) ?? undefined;
+  items.push({
+    label: 'Roughhouse',
+    emoji: '🤼',
+    disabled: rough,
+    children: [
+      { label: 'Toss', emoji: '🤾', disabled: rough, act: () => context.social(target, 'toss') },
+      { label: 'Shove', emoji: '🫸', disabled: rough, act: () => context.social(target, 'shove') },
+      { label: 'Wrestle', emoji: '🤼', disabled: rough, act: () => context.social(target, 'wrestle') },
+    ],
+  });
   items.push(social('argue', 'Argue', '💢'));
   // Waving works from across the room, so it doesn't need a way over.
   items.push({ label: 'Wave', emoji: '👋', act: () => context.social(target, 'wave') });
