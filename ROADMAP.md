@@ -122,11 +122,11 @@ or new ideas come up — it travels with the repo instead of living in a chat.
 - [x] Stairs: pawns share a flight, passing each other instead of waiting their turn (a ship ladder is still one at a time), and the Stairs tool has finishes after the kinds: pale oak, stone, painted white or black, or red, blue or green carpet, the treads in that color and the sides a shade darker. The eyedropper picks stairs up in their kind and finish
 - [x] Speed: walls are rebuilt only where they changed (a wall's own door or window, paint or light), so placing furniture or painting one wall no longer rebuilds every wall in the house, and the floor is skipped entirely when nothing about its tiles changed
 - [x] Roof per room: Per room in the Roof tool, then a style, and clicking a room gives it a flat, hip or gable roof of its own; House roof, then a room, gives it back the house's roof, and clicking House roof again puts every room back. Each style's rooms are roofed on their own, so a hip room beside a flat one slopes down to an eave above the wall between. Saved with the house and undoable
-- [x] Live-mode wall fade: with the cutaway view in Live, the walls facing the camera stay full height and fade instead of being cut down, see-through everywhere and almost clear near a pawn, easing in and out as pawns move. A fading wall gets its own see-through copy of its materials and gives it back once solid; Build and Furnish still cut walls down as before
 
 ## Next
 - More speed if needed: merge walls further
 
 ## Later
+- Live-mode wall fade (built, switched off): walls facing the camera fade instead of being cut down in Live. Tried and turned off in favor of the usual cutaway; set LIVE_WALL_FADE in src/main.ts to true to bring it back
 - Free 3D camera (paused, work in progress): a perspective camera that turns any way round the house and tilts with a middle-drag or Shift and right-drag, zooms by distance, and pans, picks and places like the usual view. It's built in the camera rig, but hidden: set CAMERA_3D in src/main.ts to true to bring back 🎥 in the camera cross and the V key
 - Pawn polish: a walk animation

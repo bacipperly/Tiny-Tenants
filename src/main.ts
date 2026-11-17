@@ -144,10 +144,12 @@ function applyLevelView() {
   updateCutaway();
 }
 
+/** Whether walls facing the camera fade in Live rather than being cut down like everywhere else. Off: walls are cut down in Live too. */
+const LIVE_WALL_FADE = false;
+
 function updateCutaway() {
   views.forEach((view, level) => {
-    // In Live, walls facing the camera fade rather than being cut down.
-    view.walls.liveFade = inLive && level === activeLevel;
+    view.walls.liveFade = LIVE_WALL_FADE && inLive && level === activeLevel;
     view.walls.cutawayEnabled = cutawayOn && level === activeLevel;
     view.walls.allLowered = wallsDown && level === activeLevel;
     view.walls.updateCutaway(cameraRig.getCameraDirXZ());
