@@ -1,4 +1,4 @@
-import { houseSize, savedWhen } from './toolbar';
+import { chooseHouseFile, houseSize, savedWhen } from './toolbar';
 import type { HouseSummary, NewHouseStart } from './toolbar';
 
 export interface StartScreenCallbacks {
@@ -8,6 +8,8 @@ export interface StartScreenCallbacks {
   onContinue: () => void;
   onOpen: (id: string) => void;
   onNew: (start: Exclude<NewHouseStart, 'copy'>) => void;
+  /** A house file to open as a new house. */
+  onImport: (file: File) => void;
   /** When the screen opens or closes, so the game can hide its menus and turn the view. */
   onShownChange: (shown: boolean) => void;
 }
@@ -99,6 +101,12 @@ export function createStartScreen(parent: HTMLElement, callbacks: StartScreenCal
       }
       card.appendChild(houses);
     }
+
+    // A house saved as a file, say from another computer.
+    const importer = el('button', 'start-import', '📥 Import a house file');
+    importer.title = 'Open a house exported from the 📁 menu, here or on another browser or computer';
+    importer.onclick = () => chooseHouseFile((file) => choose(() => callbacks.onImport(file)));
+    card.appendChild(importer);
 
     screen.appendChild(el('div', 'start-footer', 'Right-click to tell your tenants what to do · Q and E turn the camera · Enter to play'));
     return play;

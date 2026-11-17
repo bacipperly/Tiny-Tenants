@@ -8,6 +8,7 @@ import type { MotionData } from './furnitureCatalog';
 import { lightAt } from './roomLighting';
 import type { RoomLight } from './roomLighting';
 import { disposeTree } from '../scene/dispose';
+import { growth } from '../sim/dayClock';
 
 type PlacedPart = THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>;
 
@@ -101,6 +102,12 @@ export class FurniturePlacer {
   animate(time: number, inUse: ReadonlySet<string>) {
     const seconds = this.lastTime === null ? 0 : Math.min(0.1, time - this.lastTime);
     this.lastTime = time;
+    // Hedges planted small grow in, up from the ground and out to the sides.
+    for (const piece of this.allPieces) {
+      if (piece.plantedOn === undefined) continue;
+      const grown = growth(piece.plantedOn);
+      this.pieces.get(piece.id)?.scale.set(0.6 + 0.4 * grown, grown, 0.6 + 0.4 * grown);
+    }
     for (const part of this.movingParts) animatePart(part, part.userData.motion as MotionData, time, inUse.has(part.userData.furnitureId), seconds);
   }
 

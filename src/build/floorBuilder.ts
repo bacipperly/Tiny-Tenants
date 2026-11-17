@@ -56,9 +56,16 @@ export class FloorBuilder {
   /** Every other surface butts up to the next tile, so its pattern runs on unbroken. */
   private fullTile = new THREE.BoxGeometry(CELL_SIZE, 0.06, CELL_SIZE);
   private materials = new Map<FloorSurface, THREE.MeshStandardMaterial>();
+  /** What the floor was last built from, so a rebuild that changes nothing about the tiles is skipped. */
+  private built = '';
 
   /** `open` is the squares left as a hole, where stairs come up from the floor below. */
   rebuild(model: GridModel, light: RoomLight, open: ReadonlySet<string> = new Set()) {
+    // Placing furniture or putting up a fence rebuilds the floor too; with the tiles and their light the same, there's nothing to do.
+    const tiles = model.allFloors();
+    const built = JSON.stringify([tiles, tiles.map((cell) => lightAt(light, model, cell)), [...open].sort()]);
+    if (built === this.built) return;
+    this.built = built;
     for (const child of this.group.children) (child as THREE.Mesh).geometry.dispose();
     this.group.clear();
     const bySurface = new Map<FloorSurface, THREE.BufferGeometry[]>();

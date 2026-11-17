@@ -111,22 +111,20 @@ or new ideas come up — it travels with the repo instead of living in a chat.
 - [x] Pitched roofs: a 🏠 Roof tool in Build picks flat, hip or gable for the whole house. Hip and gable roofs follow any shape (L-shapes get valleys). Gables give each wing of an L, T or U its own ridge, running out from the main block, and wall in their ends. Pitched roofs have eaves, and each slope is shaded by which way it faces. Pitched roofs are shingled, in rows that run level along each slope; flat roofs have a gravel finish. Saved with the house and undoable
 - [x] A start screen the game opens on, titled Tiny Tenants, with the house you were in turning slowly behind it: Continue (or Move in the first time), a new Starter house, Garden lot or Empty lot, and your other saved houses. Enter plays, and the 📁 menu has a way back to it. The game is also published on GitHub Pages
 - [x] Each house has its own household: its own people, how they get along, and the mess they leave. Switching houses leaves the last one as it was. A Starter house or Empty lot starts with a couple, the Garden lot with the big household, and a copy brings everyone along. A house saved before this keeps the people it had. The start screen and 📁 menu show how many people live in each house
+- [x] Roads: an Asphalt floor, and Road line (a dashed yellow center line) and Double line (two solid yellow lines) floors laid down the middle of a road. A line runs on into the line tiles beside it, or along the asphalt when it is on its own, and where lines meet from both ways it leaves bare asphalt for the crossing. A Crosswalk floor of white zebra stripes, laid in a row across a road, with its stripes running the way the traffic does
+- [x] Furniture eyedropper: in the Furniture tool, Alt/Option-click a placed piece, or turn on 💧 Pick up at the end of the Furnish tabs and click one, to pick up that kind in its color and place more. A pool item goes back to the Pool tool's row
+- [x] Export and import a house: the 📁 menu's 📤 Export saves the house you're in, with the people who live there and their mess, as a .tiny-tenants.json file, and 📥 Import (also on the start screen) opens one as a new house. A file that isn't a house is turned away, and you stay in the house you were in
+- [x] Fence polish: the Paint tool paints fences and railings (brush, a bucket for a whole joined run of the same style and color, and the eyedropper), clicking a fence with the Fence tool changes it to the picked style and keeps its gate and paint, and the Delete tool can take away a single railing drawn for you upstairs (undoable). A painted or restyled auto-railing becomes a fence of its own
+- [x] Roof pitch and color, in the Roof tool: Low, Medium or Steep pitched roofs, and a row of colors (charcoal, brown, red, terracotta, green, blue, sand, white, or the covering's own) that tint whatever the roof is covered in, flat roofs too. Saved with the house and undoable
+- [x] Day and night: a clock top left runs while the household lives (a day takes 12 minutes, or click 1× for 4× and 12×), and pauses with P. The sun crosses the sky from east to west, golden at dawn and dusk; at night the lot goes dark and blue under a dim moon, window daylight fades, and lamps, fires and garden lights glow brighter. At night everyone gets sleepy and tired faster, picks a bed over staying up, and sleeps through until morning. The time of day is kept between visits
+- [x] Half walls and growing hedges: a Half wall in the Fence tool, waist high with a ledge along the top, which blocks walking but doesn't split a room, lets a counter stand against it, and takes paint like a wall. A hedge is planted small and grows in to full size over three days of the clock (hedges from before this are full grown)
+- [x] Stairs: pawns share a flight, passing each other instead of waiting their turn (a ship ladder is still one at a time), and the Stairs tool has finishes after the kinds: pale oak, stone, painted white or black, or red, blue or green carpet, the treads in that color and the sides a shade darker. The eyedropper picks stairs up in their kind and finish
+- [x] Speed: walls are rebuilt only where they changed (a wall's own door or window, paint or light), so placing furniture or painting one wall no longer rebuilds every wall in the house, and the floor is skipped entirely when nothing about its tiles changed
+- [x] Roof per room: Per room in the Roof tool, then a style, and clicking a room gives it a flat, hip or gable roof of its own; House roof, then a room, gives it back the house's roof, and clicking House roof again puts every room back. Each style's rooms are roofed on their own, so a hip room beside a flat one slopes down to an eave above the wall between. Saved with the house and undoable
+- [x] Live-mode wall fade: with the cutaway view in Live, the walls facing the camera stay full height and fade instead of being cut down, see-through everywhere and almost clear near a pawn, easing in and out as pawns move. A fading wall gets its own see-through copy of its materials and gives it back once solid; Build and Furnish still cut walls down as before
 
 ## Next
-- More speed if needed: merge walls further, rebuild walls and floors only where they changed
-- Eyedropper for furniture: click a placed piece to pick up that kind to place again
-- Floor textures to paint with (wood, tile, carpet, stone) and patterns, not just colors
 
 ## Later
-- Each house with its own household, rather than the same pawns in every house
-- Day and night: the sun moves, evenings get dark so lamps matter, and pawns go to bed at night (they already sleep in beds when they're tired)
-- Roof per area rather than one style for the whole house, a choice of pitch and roof color or material
+- Free 3D camera (paused, work in progress): a perspective camera that turns any way round the house and tilts with a middle-drag or Shift and right-drag, zooms by distance, and pans, picks and places like the usual view. It's built in the camera rig, but hidden: set CAMERA_3D in src/main.ts to true to bring back 🎥 in the camera cross and the V key
 - Pawn polish: a walk animation, and a silhouette when a pawn is behind a wall
-- Half walls (waist-high, can hold a countertop, don't split a room) and hedges that grow in over a few days
-- Fence polish: painting fences, changing a fence's style by clicking it, and removing a single auto-railing
-- Pawns passing each other on the stairs rather than waiting their turn, and stair materials (stone, painted, carpet runner)
-- Free 3D perspective camera (the camera module was built to make this an
-  isolated swap, not a rewrite)
-- Live-mode wall fade: walls near the walking pawn fade instead of the hard
-  per-rotation cutaway. Walls now share one material to draw faster, so a
-  faded wall would get its own see-through copy

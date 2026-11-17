@@ -26,7 +26,22 @@ interface BuiltWall {
   meshes: THREE.Mesh[];
   /** The doors themselves, which swing or slide, and go away with the wall when it's cut down. */
   leaves: THREE.Group[];
+  /** A door in the wall that opens for pawns, if there is one. */
+  door?: MovingDoor;
+  /** Everything the wall's look depends on, so an unchanged wall can be kept through a rebuild. */
+  signature: string;
+  /** How see-through it is in Live, from 1, solid, down; and its see-through copies of its materials while it's faded. */
+  fade?: number;
+  fadeCopies?: Map<THREE.Material, THREE.Material>;
 }
+
+/** In Live, a wall facing the camera within this many squares of a pawn fades the most. */
+const FADE_NEAR = 2.6;
+/** How see-through a wall facing the camera is in Live: near a pawn, and anywhere else. */
+const FADE_NEAR_OPACITY = 0.12;
+const FADE_FAR_OPACITY = 0.38;
+/** How quickly a wall fades in and out, as it would get most of the way there in about a third of a second. */
+const FADE_SPEED = 6;
 
 /** One door, or half of a pair, and how it moves: swinging on a hinge at its left or right, or sliding along. */
 interface Leaf {
@@ -200,19 +215,45 @@ export class WallBuilder {
   allLowered = false;
   private built: BuiltWall[] = [];
   private doors: MovingDoor[] = [];
+  /**
+   * Live's view: instead of cutting down the walls that face the camera, they
+   * stay full height and fade, most of all near a pawn, so you see through to
+   * the household without the house looking chopped.
+   */
+  liveFade = false;
+  /** The walls facing the camera that fade in Live, by wall key. */
+  private fading = new Set<string>();
 
+  /**
+   * Builds the walls again. Only walls that changed, in themselves, their door
+   * or window, their paint or the light on them, are built afresh; the rest are
+   * kept as they are, so placing a chair doesn't rebuild every wall in the house.
+   */
   rebuild(model: GridModel, light: RoomLight) {
-    disposeTree(this.group, KEEP);
+    const previous = new Map(this.built.map((built) => [wallKey(built.seg.x, built.seg.z, built.seg.dir), built]));
     this.group.clear();
     this.built = [];
     this.doors = [];
     for (const seg of model.allWalls()) {
       const [ownerCell, neighborCell] = wallSides(seg.x, seg.z, seg.dir);
       const sides: WallSideLight = { owner: lightAt(light, model, ownerCell), neighbor: lightAt(light, model, neighborCell) };
-      const built = this.buildSegment(seg, model.getAperture(seg.x, seg.z, seg.dir), sides);
+      const aperture = model.getAperture(seg.x, seg.z, seg.dir);
+      const signature = JSON.stringify([seg, aperture ?? null, sides]);
+      const key = wallKey(seg.x, seg.z, seg.dir);
+      const kept = previous.get(key);
+      let built: BuiltWall;
+      if (kept && kept.signature === signature) {
+        built = kept;
+        previous.delete(key);
+      } else {
+        built = this.buildSegment(seg, aperture, sides, signature);
+      }
       this.group.add(built.group);
       this.built.push(built);
+      if (built.door) this.doors.push(built.door);
     }
+    // Walls taken down, or changed and built again.
+    for (const gone of previous.values()) disposeTree(gone.group, KEEP);
   }
 
   /** Scales each wall's whole group on Y, so door and window frames shrink with it and no wall ever fully disappears. */
@@ -220,11 +261,14 @@ export class WallBuilder {
   lowered = new Set<string>();
 
   updateCutaway(cameraDirXZ: THREE.Vector2) {
-    const lowered = this.allLowered
+    let lowered = this.allLowered
       ? new Set(this.built.map(({ seg }) => wallKey(seg.x, seg.z, seg.dir)))
       : this.cutawayEnabled
         ? computeHiddenWalls(this.built.map((built) => built.seg), cameraDirXZ)
         : new Set<string>();
+    // In Live the walls that would be cut down fade instead.
+    this.fading = this.liveFade && !this.allLowered && this.cutawayEnabled ? lowered : new Set();
+    if (this.fading.size > 0) lowered = new Set();
     this.lowered = lowered;
     for (const built of this.built) {
       this.setLowered(built, lowered.has(wallKey(built.seg.x, built.seg.z, built.seg.dir)));
@@ -265,7 +309,64 @@ export class WallBuilder {
     }
   }
 
-  private buildSegment(seg: WallSegment, aperture: ApertureObject | undefined, sides: WallSideLight): BuiltWall {
+  /** Call every frame with where the pawns are on this floor, in the world: walls facing the camera fade in Live, most of all near a pawn. */
+  animateFade(seconds: number, pawns: THREE.Vector3[]) {
+    const step = Math.min(1, FADE_SPEED * seconds);
+    for (const built of this.built) {
+      let target = 1;
+      if (this.fading.has(wallKey(built.seg.x, built.seg.z, built.seg.dir))) {
+        const middle = built.group.position;
+        const near = pawns.some((pawn) => Math.hypot(pawn.x - middle.x, pawn.z - middle.z) < FADE_NEAR);
+        target = near ? FADE_NEAR_OPACITY : FADE_FAR_OPACITY;
+      }
+      const current = built.fade ?? 1;
+      if (current === target) continue;
+      let next = current + (target - current) * step;
+      if (Math.abs(target - next) < 0.01) next = target;
+      built.fade = next;
+      this.applyFade(built, next);
+    }
+  }
+
+  /** Gives a fading wall see-through copies of its materials, or once it's solid again, its own back. */
+  private applyFade(built: BuiltWall, opacity: number) {
+    const meshes: THREE.Mesh[] = [];
+    built.group.traverse((object) => {
+      if (object instanceof THREE.Mesh) meshes.push(object);
+    });
+    if (opacity >= 1) {
+      if (!built.fadeCopies) return;
+      for (const mesh of meshes) {
+        if (mesh.userData.solidMaterial) mesh.material = mesh.userData.solidMaterial;
+        delete mesh.userData.solidMaterial;
+      }
+      for (const copy of built.fadeCopies.values()) copy.dispose();
+      built.fadeCopies = undefined;
+      return;
+    }
+    if (!built.fadeCopies) {
+      const copies = new Map<THREE.Material, THREE.Material>();
+      const copyOf = (material: THREE.Material) => {
+        let copy = copies.get(material);
+        if (!copy) {
+          copy = material.clone();
+          copy.userData.baseOpacity = material.transparent ? material.opacity : 1;
+          copy.transparent = true;
+          copy.depthWrite = false;
+          copies.set(material, copy);
+        }
+        return copy;
+      };
+      for (const mesh of meshes) {
+        mesh.userData.solidMaterial = mesh.material;
+        mesh.material = Array.isArray(mesh.material) ? mesh.material.map(copyOf) : copyOf(mesh.material);
+      }
+      built.fadeCopies = copies;
+    }
+    for (const copy of built.fadeCopies.values()) copy.opacity = opacity * (copy.userData.baseOpacity as number);
+  }
+
+  private buildSegment(seg: WallSegment, aperture: ApertureObject | undefined, sides: WallSideLight, signature: string): BuiltWall {
     const group = new THREE.Group();
     const pos = edgeMidpointWorld(seg.x, seg.z, seg.dir);
     const rotY = edgeRotationY(seg.dir);
@@ -274,6 +375,7 @@ export class WallBuilder {
 
     const meshes: THREE.Mesh[] = [];
     const leaves: THREE.Group[] = [];
+    let door: MovingDoor | undefined;
     if (aperture?.kind === 'door') {
       const style = aperture.style ?? 'open';
       meshes.push(...this.doorFrame(seg, sides, style));
@@ -282,7 +384,7 @@ export class WallBuilder {
         group.add(leaf.pivot);
         leaves.push(leaf.pivot);
       }
-      if (moving.length > 0) this.doors.push({ center: pos.clone(), rotY, leaves: moving, openness: 0, side: 1 });
+      if (moving.length > 0) door = { center: pos.clone(), rotY, leaves: moving, openness: 0, side: 1 };
     } else if (aperture?.kind === 'window') {
       meshes.push(...this.windowFrame(seg, sides, aperture));
     } else {
@@ -293,7 +395,7 @@ export class WallBuilder {
     group.userData.wall = seg;
     bakeFaceColors(meshes);
 
-    return { group, seg, meshes, leaves };
+    return { group, seg, meshes, leaves, door, signature };
   }
 
   private plainWall(materials: THREE.Material[]): THREE.Mesh {

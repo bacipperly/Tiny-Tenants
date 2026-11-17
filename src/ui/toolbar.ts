@@ -1,8 +1,8 @@
 import { FURNITURE_CATALOG, FURNITURE_CATEGORIES, getFurnitureDef } from '../build/furnitureCatalog';
-import type { FlatRoofFinish, RoofMaterial, RoofStyle } from '../grid/house';
+import type { FlatRoofFinish, RoofMaterial, RoofStyle, RoofPitch, RoofCovering } from '../grid/house';
 import type { FenceStyle, FloorSurface, PillarStyle, PoolKind } from '../grid/gridModel';
 import { SURFACES } from '../build/floorTextures';
-import { STAIR_DEFS, STAIR_HINTS } from '../build/stairs';
+import { STAIR_DEFS, STAIR_HINTS, STAIR_FINISHES } from '../build/stairs';
 import type { FurnitureCategory } from '../build/furnitureCatalog';
 import type { ToolId, WallDrawMode, FloorDrawMode, DeleteMode, DeleteFilter, PaintTarget, PaintMethod } from '../build/tools';
 import type { DoorStyle, WindowSize } from '../grid/gridModel';
@@ -23,6 +23,8 @@ export interface BuildToolbarCallbacks {
   onMode: (mode: AppMode) => void;
   onTool: (tool: ToolId) => void;
   onFurnitureType: (type: string) => void;
+  /** The 💧 Pick up button: on, the next click on a placed piece picks up that kind to place more. */
+  onFurniturePicking: (on: boolean) => void;
   /** The color pieces of this type are placed in, like a bed's bedding; none for their own. */
   onFurnitureColor: (type: string, color: string | undefined) => void;
   onPaintColor: (color: string) => void;
@@ -35,9 +37,15 @@ export interface BuildToolbarCallbacks {
   /** The whole house's roof: flat, hip or gable. */
   onRoofStyle: (style: RoofStyle) => void;
   /** What pitched roofs are covered in, or flat ones finished with. */
-  onRoofCovering: (covering: { material?: RoofMaterial; flat?: FlatRoofFinish }) => void;
+  onRoofCovering: (covering: RoofCovering) => void;
+  /** The Roof tool a room at a time: the style a clicked room gets, null for the house's roof, or undefined for whole-house styles. */
+  onRoofForRoom: (style: RoofStyle | null | undefined) => void;
+  /** Puts every room back to the house's roof. */
+  onRoofAreasReset: () => void;
   /** Which kind of stairs the Stairs tool places. */
   onStairsType: (type: string) => void;
+  /** What stairs are placed in: a color for their treads, or none for their own wood. */
+  onStairsFinish: (color: string | null) => void;
   /** Which tree, plant or garden piece the Outdoor tool places. */
   onOutdoorType: (type: string) => void;
   /** What the Pool tool digs: a pool or a spa. */
@@ -471,12 +479,50 @@ export function createBuildToolbar(container: HTMLElement, callbacks: BuildToolb
     btn.title = style.hint;
     btn.innerHTML = `<span class="emoji">${style.emoji}</span><span>${style.label}</span>`;
     btn.onclick = () => {
+      roofPicked = style.id;
+      houseRoofBtn.classList.remove('active');
+      // One room at a time, the style is only picked, for the rooms clicked next.
+      if (roofPerRoom) {
+        callbacks.onRoofForRoom(style.id);
+        for (const [id, each] of roofStyleButtons) each.classList.toggle('active', id === style.id);
+        return;
+      }
       callbacks.onRoofStyle(style.id);
       setActiveRoofStyle(style.id);
     };
     roofStyleButtons.set(style.id, btn);
     roofStyleRow.appendChild(btn);
   }
+
+  // Whole house, or one room at a time: then a style is picked, and clicking a room gives it that roof.
+  let roofPerRoom = false;
+  let roofPicked: RoofStyle = 'flat';
+  const perRoomBtn = document.createElement('button');
+  perRoomBtn.className = 'submode-btn';
+  perRoomBtn.title = 'One room at a time: pick a style, then click a room to give it that roof. Off, a style is for the whole house';
+  perRoomBtn.innerHTML = '<span class="emoji">🖱️</span><span>Per room</span>';
+  perRoomBtn.onclick = () => {
+    roofPerRoom = !roofPerRoom;
+    perRoomBtn.classList.toggle('active', roofPerRoom);
+    if (!roofPerRoom) houseRoofBtn.classList.remove('active');
+    callbacks.onRoofForRoom(roofPerRoom ? roofPicked : undefined);
+  };
+  const houseRoofBtn = document.createElement('button');
+  houseRoofBtn.className = 'submode-btn';
+  houseRoofBtn.title = "Click a room to give it back the house's roof, or click here again to put every room back";
+  houseRoofBtn.innerHTML = '<span class="emoji">↩️</span><span>House roof</span>';
+  houseRoofBtn.onclick = () => {
+    if (roofPerRoom && roofPicked !== null && houseRoofBtn.classList.contains('active')) {
+      callbacks.onRoofAreasReset();
+      return;
+    }
+    roofPerRoom = true;
+    perRoomBtn.classList.add('active');
+    houseRoofBtn.classList.add('active');
+    for (const btn of roofStyleButtons.values()) btn.classList.remove('active');
+    callbacks.onRoofForRoom(null);
+  };
+  roofStyleRow.append(perRoomBtn, houseRoofBtn);
 
   // --- What the roof is covered in: pitched and flat roofs each have their own ---
   const roofCoveringRow = document.createElement('div');
@@ -518,10 +564,52 @@ export function createBuildToolbar(container: HTMLElement, callbacks: BuildToolb
       setActiveRoofCovering({ ...roofCovering, flat: covering.id });
     }));
   }
-  let roofCovering: { material: RoofMaterial; flat: FlatRoofFinish } = { material: 'slate', flat: 'gravel' };
+  // --- How steep a pitched roof is, and the roof's color ---
+  const roofFinishRow = document.createElement('div');
+  roofFinishRow.className = 'toolbar-row submode-row roof-finish-row';
+  shelf.appendChild(roofFinishRow);
+  const pitchButtons = new Map<RoofPitch, HTMLButtonElement>();
+  const pitches: { id: RoofPitch; label: string; emoji: string; hint: string }[] = [
+    { id: 'low', label: 'Low', emoji: '⌒', hint: 'A low, gentle slope' },
+    { id: 'medium', label: 'Medium', emoji: '△', hint: 'An everyday slope' },
+    { id: 'steep', label: 'Steep', emoji: '⛰️', hint: 'A tall, steep slope, like a cottage or an A-frame' },
+  ];
+  for (const pitch of pitches) {
+    const btn = document.createElement('button');
+    btn.className = 'submode-btn';
+    btn.title = `${pitch.hint}, for the whole roof`;
+    btn.innerHTML = `<span class="emoji">${pitch.emoji}</span><span>${pitch.label}</span>`;
+    btn.onclick = () => {
+      callbacks.onRoofCovering({ pitch: pitch.id });
+      setActiveRoofCovering({ ...roofCovering, pitch: pitch.id });
+    };
+    pitchButtons.set(pitch.id, btn);
+    roofFinishRow.appendChild(btn);
+  }
+  const roofColorButtons = new Map<string | null, HTMLButtonElement>();
+  for (const { label, color } of ROOF_COLORS) {
+    const btn = document.createElement('button');
+    btn.className = 'roof-color-swatch';
+    btn.title = color ? `${label} roof` : "The covering's own colors";
+    if (color) btn.style.background = color;
+    else btn.textContent = '✕';
+    btn.onclick = () => {
+      callbacks.onRoofCovering({ color });
+      setActiveRoofCovering({ ...roofCovering, color: color ?? undefined });
+    };
+    roofColorButtons.set(color, btn);
+    roofFinishRow.appendChild(btn);
+  }
+
+  let roofCovering: { material: RoofMaterial; flat: FlatRoofFinish; pitch: RoofPitch; color?: string } = { material: 'slate', flat: 'gravel', pitch: 'medium' };
   let roofIsFlat = true;
-  function setActiveRoofCovering(covering: { material: RoofMaterial; flat: FlatRoofFinish }) {
+  function setActiveRoofCovering(covering: { material: RoofMaterial; flat: FlatRoofFinish; pitch: RoofPitch; color?: string }) {
     roofCovering = covering;
+    for (const [id, btn] of pitchButtons) {
+      btn.classList.toggle('active', id === covering.pitch);
+      btn.style.display = roofIsFlat ? 'none' : '';
+    }
+    for (const [color, btn] of roofColorButtons) btn.classList.toggle('active', color === (covering.color ?? null));
     for (const [id, btn] of pitchedCoveringButtons) {
       btn.classList.toggle('active', id === covering.material);
       btn.style.display = roofIsFlat ? 'none' : '';
@@ -533,7 +621,10 @@ export function createBuildToolbar(container: HTMLElement, callbacks: BuildToolb
   }
 
   function setActiveRoofStyle(active: RoofStyle) {
-    for (const [id, btn] of roofStyleButtons) btn.classList.toggle('active', id === active);
+    // A room at a time, what's lit is the style rooms are being given, if any, not the house's.
+    if (!roofPerRoom) roofPicked = active;
+    const lit = roofPerRoom ? (houseRoofBtn.classList.contains('active') ? null : roofPicked) : active;
+    for (const [id, btn] of roofStyleButtons) btn.classList.toggle('active', id === lit);
     // Only the coverings for this kind of roof are on offer.
     roofIsFlat = active === 'flat';
     setActiveRoofCovering(roofCovering);
@@ -550,6 +641,7 @@ export function createBuildToolbar(container: HTMLElement, callbacks: BuildToolb
     { id: 'ranch', label: 'Ranch', emoji: '🐴', hint: 'Wooden posts and two rails' },
     { id: 'privacy', label: 'Privacy', emoji: '🚧', hint: 'Tall close boards nobody can see over' },
     { id: 'stone', label: 'Stone', emoji: '🪨', hint: 'A low stone wall' },
+    { id: 'half-wall', label: 'Half wall', emoji: '🧱', hint: "A waist-high wall with a ledge on top, indoors or out. It doesn't split a room, a counter can stand against it, and it takes paint like a wall" },
     { id: 'wood-rail', label: 'Wood railing', emoji: '🪵', hint: 'Wooden balusters and a handrail, for balconies. Tiles you lay upstairs from now on get it too' },
     { id: 'iron-rail', label: 'Iron railing', emoji: '⚫', hint: 'Thin black balusters. Tiles you lay upstairs from now on get it too' },
     { id: 'glass-rail', label: 'Glass railing', emoji: '🔷', hint: 'A clear glass panel and a metal rail. Tiles you lay upstairs from now on get it too' },
@@ -605,6 +697,26 @@ export function createBuildToolbar(container: HTMLElement, callbacks: BuildToolb
     stairsButtons.set(def.type, btn);
     stairsRow.appendChild(btn);
   }
+
+  // What the stairs are finished in, after the kinds.
+  const stairFinishButtons = new Map<string | null, HTMLButtonElement>();
+  for (const { label, color } of STAIR_FINISHES) {
+    const btn = document.createElement('button');
+    btn.className = 'roof-color-swatch';
+    btn.title = color ? `${label} stairs` : 'Stairs in their own wood';
+    if (color) btn.style.background = color;
+    else btn.textContent = '🪵';
+    btn.onclick = () => {
+      callbacks.onStairsFinish(color);
+      setActiveStairFinish(color);
+    };
+    stairFinishButtons.set(color, btn);
+    stairsRow.appendChild(btn);
+  }
+  function setActiveStairFinish(active: string | null) {
+    for (const [color, btn] of stairFinishButtons) btn.classList.toggle('active', color === active);
+  }
+  setActiveStairFinish(null);
 
   function setActiveStairs(active: string) {
     for (const [id, btn] of stairsButtons) btn.classList.toggle('active', id === active);
@@ -709,9 +821,31 @@ export function createBuildToolbar(container: HTMLElement, callbacks: BuildToolb
   shelf.appendChild(furnitureRow);
   shelf.appendChild(noMatches);
 
+  // The eyedropper, at the end of the tabs: click it, then a placed piece, to place more of that kind in its color.
+  const pickBtn = document.createElement('button');
+  pickBtn.className = 'furniture-category-btn furniture-pick-btn';
+  pickBtn.title = 'Eyedropper: click a placed piece to pick up that kind, in its color, to place more. Alt/Option-click a piece does it too';
+  pickBtn.textContent = '💧 Pick up';
+  let furniturePicking = false;
+  function setFurniturePicking(on: boolean) {
+    furniturePicking = on;
+    pickBtn.classList.toggle('active', on);
+  }
+  pickBtn.onclick = () => {
+    if (activeTool !== 'furniture') {
+      callbacks.onTool('furniture');
+      setActiveTool('furniture');
+    }
+    setFurniturePicking(!furniturePicking);
+    callbacks.onFurniturePicking(furniturePicking);
+  };
+  furnitureCategoryRow.appendChild(pickBtn);
+
   const furnitureButtons = new Map<string, HTMLButtonElement>();
   /** The colors picked for pieces from their wheels, by type. Null is the piece's own color; nothing picked yet is white. */
   const pieceColors = new Map<string, string | null>();
+  /** Each colorable piece's drop, and the color it shows for "its own". */
+  const colorDots = new Map<string, { dot: HTMLElement; own: string }>();
   for (const def of FURNITURE_CATALOG) {
     if (def.buildTool) continue;
     const btn = document.createElement('button');
@@ -735,6 +869,7 @@ export function createBuildToolbar(container: HTMLElement, callbacks: BuildToolb
       dot.className = 'piece-color-dot';
       dot.style.background = DEFAULT_PIECE_COLOR;
       btn.appendChild(dot);
+      colorDots.set(def.type, { dot, own });
       btn.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         openColorWheel(e.clientX, e.clientY, {
@@ -830,6 +965,46 @@ export function createBuildToolbar(container: HTMLElement, callbacks: BuildToolb
     searchInput.focus();
     searchInput.select();
   });
+
+  /**
+   * The eyedropper picked up a placed piece: that kind goes in hand to place
+   * more, in the piece's color. A pool item goes back to the Pool tool's row;
+   * anything else is found in the palette.
+   */
+  function pickUpPiece(type: string, color: string | undefined) {
+    setFurniturePicking(false);
+    const def = getFurnitureDef(type);
+    if (def.stairs) {
+      // Stairs go back to the Stairs tool, in their kind and finish.
+      setActiveToolAnyMode('stairs');
+      callbacks.onStairsType(type);
+      setActiveStairs(type);
+      callbacks.onStairsFinish(color ?? null);
+      setActiveStairFinish(color ?? null);
+      callbacks.onTool('stairs');
+      return;
+    }
+    if (def.pool) {
+      setActiveToolAnyMode('pool');
+      callbacks.onTool('pool');
+      callbacks.onPoolItem(type);
+      setActivePoolItem(type);
+      return;
+    }
+    const drop = colorDots.get(type);
+    if (drop) {
+      // No color of its own picked means it was placed in the piece's own.
+      pieceColors.set(type, color ?? null);
+      drop.dot.style.background = color ?? drop.own;
+      callbacks.onFurnitureColor(type, color);
+    }
+    setSearch('');
+    if (activeMode !== 'furnish') {
+      callbacks.onMode('furnish');
+      setActiveMode('furnish');
+    }
+    pickFurniture(type);
+  }
 
   /** Picking a piece also goes back to placing, say from Delete. */
   function pickFurniture(type: string) {
@@ -980,6 +1155,7 @@ export function createBuildToolbar(container: HTMLElement, callbacks: BuildToolb
 
   function setActiveTool(active: ToolId) {
     activeTool = active;
+    if (active !== 'furniture') setFurniturePicking(false);
     if (active !== 'none' && activeMode !== 'live') lastToolOfMode[activeMode] = active;
     for (const [id, btn] of toolButtons) btn.classList.toggle('active', id === active);
     // In Furnish mode, the piece you'd place only lights up while you're placing.
@@ -997,6 +1173,7 @@ export function createBuildToolbar(container: HTMLElement, callbacks: BuildToolb
     windowSizeRow.style.display = active === 'window' ? 'flex' : 'none';
     doorStyleRow.style.display = active === 'door' ? 'flex' : 'none';
     roofStyleRow.style.display = active === 'roof' ? 'flex' : 'none';
+    roofFinishRow.style.display = active === 'roof' ? 'flex' : 'none';
     roofCoveringRow.style.display = active === 'roof' ? 'flex' : 'none';
     stairsRow.style.display = active === 'stairs' ? 'flex' : 'none';
     outdoorRow.style.display = active === 'outdoor' ? 'flex' : 'none';
@@ -1049,6 +1226,7 @@ export function createBuildToolbar(container: HTMLElement, callbacks: BuildToolb
     [doorStyleRow, 'Style'],
     [roofStyleRow, 'Roof shape'],
     [roofCoveringRow, 'Covering'],
+    [roofFinishRow, 'Pitch & color'],
     [stairsRow, 'Kind'],
     // Tiles, like Furnish's pieces, so no label.
     [outdoorRow, ''],
@@ -1239,7 +1417,7 @@ export function createBuildToolbar(container: HTMLElement, callbacks: BuildToolb
     modeButtons.get(mode)!.click();
   }
 
-  return { setActiveRoofCovering, pressMode, setActiveOutdoor, modeRow, householdSlot, inspectorSlot, setActiveRoofStyle, setActiveStairs, setFenceState, setActiveToolAnyMode, setActiveFurniture, setActivePaintColor, setActivePaintTarget, setActivePaintMethod, setActiveWallMode, setActiveDeleteMode, setHistoryState };
+  return { pickUpPiece, setFurniturePicking, setActiveRoofCovering, pressMode, setActiveOutdoor, modeRow, householdSlot, inspectorSlot, setActiveRoofStyle, setActiveStairs, setFenceState, setActiveToolAnyMode, setActiveFurniture, setActivePaintColor, setActivePaintTarget, setActivePaintMethod, setActiveWallMode, setActiveDeleteMode, setHistoryState };
 }
 
 // ============================================================================
@@ -1259,6 +1437,8 @@ export interface ViewControlsCallbacks {
   /** Whether the selected pawn's status stays up in Build and Furnish too, not just Live. */
   onShowStatuses: (visible: boolean) => void;
   onCenterCamera: () => void;
+  /** Turns the free 3D camera on or off. */
+  onCamera3D: (on: boolean) => void;
   /** Up or down a floor of the house. */
   onLevel: (direction: 'up' | 'down') => void;
 }
@@ -1289,7 +1469,7 @@ function wallViewIcon(mode: WallViewMode): string {
   return `<svg class="wall-view-icon" viewBox="5 -9 54 66" aria-hidden="true">${shapes}</svg>`;
 }
 
-export function createViewControls(container: HTMLElement, callbacks: ViewControlsCallbacks, options: { layout?: UiLayout } = {}) {
+export function createViewControls(container: HTMLElement, callbacks: ViewControlsCallbacks, options: { layout?: UiLayout; camera3D?: boolean } = {}) {
   const band = options.layout === 'band';
   container.innerHTML = '';
   container.className = 'panel view-panel';
@@ -1321,7 +1501,20 @@ export function createViewControls(container: HTMLElement, callbacks: ViewContro
   centerBtn.style.gridColumn = '2';
   centerBtn.style.gridRow = '2';
 
+  // The free 3D camera, in the cross's corner: it turns any way round the house and tilts, with a middle-drag or Shift and right-drag.
+  let camera3D = false;
+  const camera3DBtn = makeIconButton('🎥', '3D camera: turn and tilt freely with a middle-drag, or Shift and right-drag. Click again for the usual view', 'V', () => setCamera3D(!camera3D, true));
+  camera3DBtn.style.gridColumn = '3';
+  camera3DBtn.style.gridRow = '3';
+  function setCamera3D(on: boolean, tell = false) {
+    camera3D = on;
+    camera3DBtn.classList.toggle('active', on);
+    if (tell) callbacks.onCamera3D(on);
+  }
+
   cross.append(zoomInBtn, ccwBtn, centerBtn, cwBtn, zoomOutBtn);
+  // The 3D camera is still a work in progress, so it only shows when it's switched on.
+  if (options.camera3D) cross.append(camera3DBtn);
 
   // --- Which floor of the house you're on: up, its name, down. ---
   const levelRow = document.createElement('div');
@@ -1446,7 +1639,7 @@ export function createViewControls(container: HTMLElement, callbacks: ViewContro
     });
   }
 
-  return { setStatusesShown, setLevel, setWallView: setActiveWallView, specialViews };
+  return { setStatusesShown, setLevel, setWallView: setActiveWallView, specialViews, setCamera3D };
 }
 
 // ============================================================================
@@ -1483,6 +1676,22 @@ export interface FileControlsCallbacks {
   houses: () => { list: HouseSummary[]; currentId: string | null };
   /** Back to the title screen the game opens on. */
   onHome: () => void;
+  /** Saves the house you're in, with its household, as a file. */
+  onExport: () => void;
+  /** Opens a house file as a new house. */
+  onImport: (file: File) => void;
+}
+
+/** Asks for a house file and hands it over, for the 📁 menu and the start screen. */
+export function chooseHouseFile(onChosen: (file: File) => void) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+  input.onchange = () => {
+    const file = input.files?.[0];
+    if (file) onChosen(file);
+  };
+  input.click();
 }
 
 /** How long a save message stays up. A failure stays longer, since it needs reading. */
@@ -1671,10 +1880,18 @@ export function createFileControls(container: HTMLElement, callbacks: FileContro
       unsaved.textContent = 'Not saved yet. It saves on its own once you change something.';
       menu.appendChild(unsaved);
     }
-    menu.appendChild(
+    menu.append(
       overflowMenuItem('💾', lastSaved === null ? 'Save now' : `Save now — saved ${savedWhen(lastSaved)}, and saves on its own as you go`, () => {
         close();
         callbacks.onSave();
+      }),
+      overflowMenuItem('📤', 'Export this house — save it, and the people who live in it, as a file to keep or to play on another browser or computer', () => {
+        close();
+        callbacks.onExport();
+      }),
+      overflowMenuItem('📥', 'Import a house — open a house saved as a file, as a new house', () => {
+        close();
+        chooseHouseFile(callbacks.onImport);
       }),
     );
 
@@ -1753,3 +1970,16 @@ function overflowMenuItem(symbol: string, label: string, onClick: () => void): H
   btn.onclick = onClick;
   return btn;
 }
+
+/** The colors a roof can be tinted, after its own. */
+const ROOF_COLORS: { label: string; color: string | null }[] = [
+  { label: 'Natural', color: null },
+  { label: 'Charcoal', color: '#4a4b52' },
+  { label: 'Brown', color: '#7a5236' },
+  { label: 'Red', color: '#a8443a' },
+  { label: 'Terracotta', color: '#c8693c' },
+  { label: 'Green', color: '#4f7a4a' },
+  { label: 'Blue', color: '#4c6f9a' },
+  { label: 'Sand', color: '#d8c49a' },
+  { label: 'White', color: '#ecebe6' },
+];

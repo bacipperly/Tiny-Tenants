@@ -39,6 +39,9 @@ function cornerForAnchor(type: string, cell: { x: number; z: number }, rotation:
 /** How far, in screen pixels, the cursor moves with the button held before it starts turning the piece being placed. */
 const AIM_START_PIXELS = 12;
 import { PreviewRenderer, ADD_COLOR, DELETE_COLOR, RING_COLOR } from './previewRenderer';
+import { fenceColor } from './fenceBuilder';
+import { gameDay } from '../sim/dayClock';
+import type { RoofStyle } from '../grid/house';
 import { WALL_COLOR } from './wallBuilder';
 import { DEFAULT_PIECE_COLOR, isColorable } from './furnitureColors';
 import { gableColor, gableEnd, wallBelowColor } from './roofBuilder';
@@ -69,9 +72,11 @@ export interface GablePick {
   toWorld: THREE.Matrix4;
 }
 /** Something the Paint tool can paint when painting walls: one side of a wall, or a strip of gable above one. */
-type PaintSpot = { kind: 'wall'; face: WallFace } | { kind: 'gable'; gable: GablePick };
+type PaintSpot = { kind: 'wall'; face: WallFace } | { kind: 'gable'; gable: GablePick } | { kind: 'fence'; fence: FenceHit };
+/** A fence or railing the cursor is on: a real one, or one of the railings drawn for you upstairs. */
+type FenceHit = { x: number; z: number; dir: Direction; style: FenceStyle; color?: string; auto: boolean; distance: number };
 /** What a bucket click would fill, kept until the cursor moves to something else because working it out can cover the whole lot. */
-type FillPreview = { key: string; faces: WallFace[]; cells: Cell[]; gables?: { pick: GablePick; strips: GableStrip[] } };
+type FillPreview = { key: string; faces: WallFace[]; cells: Cell[]; gables?: { pick: GablePick; strips: GableStrip[] }; fences?: FenceHit[] };
 
 const STROKE_SAMPLE_SPACING = 0.01;
 
@@ -80,6 +85,7 @@ type DeleteTarget =
   | { kind: 'wall'; x: number; z: number; dir: Direction }
   | { kind: 'aperture'; x: number; z: number; dir: Direction }
   | { kind: 'fence'; x: number; z: number; dir: Direction }
+  | { kind: 'railing'; x: number; z: number; dir: Direction }
   | { kind: 'pillar'; x: number; z: number; style: PillarStyle }
   | { kind: 'floor'; x: number; z: number }
   | { kind: 'mess'; id: string; x: number; z: number }
@@ -100,6 +106,10 @@ export interface MessAccess {
 const DRAG_TOOLS: ToolId[] = ['wall', 'floor', 'window', 'fence', 'pool'];
 /** The tint over squares about to become pool. */
 const POOL_COLOR = 0x3fa9e0;
+/** The eyedropper's ring round the piece it would pick up. */
+const PICK_COLOR = 0x4aa8ff;
+/** Where a click with the Roof tool is taken to land: about where the roof is, a little above the tops of the walls. */
+const ROOF_PICK_HEIGHT = 2.3;
 
 /** How tall a fence's ghost is while you drag one out. */
 const FENCE_GHOST_HEIGHT = 1;
@@ -160,6 +170,16 @@ export class ToolController {
    * tool — used by the keyboard rotate shortcut so it works no matter which
    * tool you're on, same as selecting an object in The Sims. */
   hoveredFurniture: FurniturePiece | undefined;
+  /** The Furniture tool's eyedropper: the next click on a placed piece picks up that kind to place more. Alt/Option-click does the same. */
+  furniturePicking = false;
+  /** Fires when the eyedropper picks up a placed piece. */
+  onFurniturePicked: ((piece: FurniturePiece) => void) | null = null;
+  /** The Roof tool, a room at a time: a click gives the room under the cursor this roof, or with null, gives it back the house's. Off, the roof styles are for the whole house. */
+  roofForRoom: RoofStyle | null | undefined = undefined;
+  /** Upstairs, the railings drawn for you on the floor being edited, which can be deleted, painted or restyled one at a time. */
+  autoRailings: (() => { x: number; z: number; dir: Direction; style: FenceStyle }[]) | null = null;
+  /** The fence pressed on with the Fence tool, which a click without a drag changes to the picked style. */
+  private fencePressed: FenceHit | null = null;
   /** Finds the piece actually drawn under the cursor, so a click on a painting gets the painting and not the sofa beneath it. */
   pickFurniture: ((ndc: THREE.Vector2) => FurniturePiece | undefined) | null = null;
   /** Reports the in-progress drag's size in cells (or null when not
@@ -350,6 +370,7 @@ export class ToolController {
   private clearDrag() {
     this.dragWallKeys.clear();
     this.dragFloorKeys.clear();
+    this.fencePressed = null;
     this.wallDragAnchor = null;
     this.rectDragAnchor = null;
     this.eraseBounds = null;
@@ -434,6 +455,91 @@ export class ToolController {
     if (this.lastPointer) this.updateHover(this.lastPointer);
   }
 
+  /**
+   * The fence or railing the cursor is on, if any: looked for along the ray
+   * at a few heights up a fence, so pointing at the rail or the slats both
+   * find it. Upstairs, the railings drawn for you count too.
+   */
+  private fenceAt(ndc: THREE.Vector2): FenceHit | null {
+    const camera = this.getCamera();
+    const auto = this.autoRailings?.() ?? [];
+    for (const up of [0.5, 0.85, 0.2]) {
+      const point = raycastGround(ndc, camera, this.height + up);
+      if (!point) continue;
+      const edge = worldToEdge(point.x, point.z);
+      // Only close to the line of the edge, not anywhere in the square beside it.
+      const cell = worldToCell(point.x, point.z);
+      const off = edge.dir === 'E' || edge.dir === 'W' ? Math.abs(point.x - cell.x) : Math.abs(point.z - cell.z);
+      if (off < 0.3) continue;
+      const distance = camera.position.distanceTo(point);
+      const fence = this.model.getFence(edge.x, edge.z, edge.dir);
+      if (fence) return { x: fence.x, z: fence.z, dir: fence.dir, style: fence.style, color: fence.color, auto: false, distance };
+      const key = wallKey(edge.x, edge.z, edge.dir);
+      const railing = auto.find((each) => wallKey(each.x, each.z, each.dir) === key);
+      if (railing) return { ...railing, auto: true, distance };
+    }
+    return null;
+  }
+
+  /** Paints a fence. A railing drawn for you becomes a fence of its own first, so it can keep the paint. */
+  private paintFence(fence: FenceHit) {
+    if (fence.auto) this.model.setFence(fence.x, fence.z, fence.dir, fence.style);
+    this.model.paintFence(fence.x, fence.z, fence.dir, this.selectedPaintColor);
+  }
+
+  /** Changes a fence to the picked style, keeping its gate and paint. A railing drawn for you becomes a fence of its own in that style. */
+  private restyleFence(fence: FenceHit) {
+    if (fence.auto) this.model.setFence(fence.x, fence.z, fence.dir, this.selectedFenceStyle);
+    else this.model.restyleFence(fence.x, fence.z, fence.dir, this.selectedFenceStyle);
+  }
+
+  /** A bucket on a fence: the whole run it's part of, every fence joined end to end in the same style and color. */
+  private fenceRun(start: FenceHit): FenceHit[] {
+    const fences: FenceHit[] = [
+      ...this.model.allFences().map((fence): FenceHit => ({ ...fence, auto: false, distance: 0 })),
+      ...(this.autoRailings?.() ?? []).map((railing): FenceHit => ({ ...railing, auto: true, distance: 0 })),
+    ];
+    const all = fences.filter((fence) => fence.style === start.style && fence.color === start.color);
+    // Each edge's two ends, in half squares, so edges that meet share an end.
+    const ends = (fence: FenceHit): string[] => {
+      const { x, z, dir } = fence;
+      if (dir === 'N') return [`${2 * x - 1},${2 * z + 1}`, `${2 * x + 1},${2 * z + 1}`];
+      if (dir === 'S') return [`${2 * x - 1},${2 * z - 1}`, `${2 * x + 1},${2 * z - 1}`];
+      if (dir === 'E') return [`${2 * x + 1},${2 * z - 1}`, `${2 * x + 1},${2 * z + 1}`];
+      return [`${2 * x - 1},${2 * z - 1}`, `${2 * x - 1},${2 * z + 1}`];
+    };
+    const byEnd = new Map<string, FenceHit[]>();
+    for (const fence of all) for (const end of ends(fence)) byEnd.set(end, [...(byEnd.get(end) ?? []), fence]);
+    const startKey = wallKey(start.x, start.z, start.dir);
+    const first = all.find((fence) => wallKey(fence.x, fence.z, fence.dir) === startKey);
+    if (!first) return [start];
+    const seen = new Set<FenceHit>([first]);
+    const queue = [first];
+    while (queue.length > 0) {
+      const fence = queue.pop()!;
+      for (const end of ends(fence)) for (const next of byEnd.get(end) ?? []) if (!seen.has(next)) { seen.add(next); queue.push(next); }
+    }
+    return [...seen];
+  }
+
+  /** The square under the cursor at the height of the roof, where the roof is drawn, rather than down on the floor. */
+  private roofCellAt(e: PointerEvent): Cell | null {
+    const point = raycastGround(mouseToNdc(e, this.domElement), this.getCamera(), this.height + ROOF_PICK_HEIGHT);
+    return point ? worldToCell(point.x, point.z) : null;
+  }
+
+  /** The squares of the room this square is in, or none outdoors. */
+  private roomCellsAt(cell: Cell): Cell[] {
+    const id = this.model.roomIdAt(cell.x, cell.z);
+    if (!id) return [];
+    return this.model.allRooms().find((room) => room.id === id)?.cells ?? [];
+  }
+
+  /** Whether a click picks up a placed piece rather than placing one: the eyedropper's on, or Alt/Option is held. */
+  private isPickingFurniture(e: { altKey: boolean }): boolean {
+    return this.activeTool === 'furniture' && (this.furniturePicking || e.altKey);
+  }
+
   private isDragTool(): boolean {
     return DRAG_TOOLS.includes(this.activeTool) && !(this.activeTool === 'fence' && this.fenceGate);
   }
@@ -464,9 +570,29 @@ export class ToolController {
     const worldPoint = this.worldPointFor(e);
     if (!worldPoint) return;
 
+    if (this.activeTool === 'roof' && this.roofForRoom !== undefined) {
+      const room = this.roomCellsAt(this.roofCellAt(e) ?? worldToCell(worldPoint.x, worldPoint.z));
+      if (room.length > 0) this.model.setRoofArea(room, this.roofForRoom);
+      return;
+    }
+
+    if (this.isPickingFurniture(e)) {
+      // The eyedropper: whatever piece is clicked becomes the one in hand, in its color.
+      const cell = worldToCell(worldPoint.x, worldPoint.z);
+      const piece = this.pieceUnderCursor(e) ?? this.findFurnitureAt(cell.x, cell.z);
+      this.isPointerDown = false;
+      if (piece) {
+        this.furniturePicking = false;
+        this.onFurniturePicked?.(piece);
+      }
+      return;
+    }
+
     if (this.activeTool === 'fence' && this.fenceGate) {
       this.toggleGate(worldPoint);
     } else if (this.activeTool === 'wall' || this.activeTool === 'fence') {
+      // A click on a fence, rather than a drag from a corner, changes it to the picked style.
+      this.fencePressed = this.activeTool === 'fence' && !this.dragErasing ? this.fenceAt(mouseToNdc(e, this.domElement)) : null;
       const corner = worldToCorner(worldPoint.x, worldPoint.z);
       if (!isCornerInLot(corner.x, corner.z)) return;
       this.wallDragAnchor = corner;
@@ -565,6 +691,7 @@ export class ToolController {
       id = this.model.addFurniture(aim.type, x, z, aim.rotation);
       const color = this.placingColor(aim.type);
       if (color) this.model.setFurnitureColor(id, color);
+      if (getFurnitureDef(aim.type).grows) this.model.plantFurniture(id, gameDay());
     });
     this.announceStairs(id);
   }
@@ -853,9 +980,10 @@ export class ToolController {
     if (this.strokePaintMethod === 'brush') {
       this.paintStroke(e);
     } else if (this.strokePaintMethod === 'bucket') {
-      const { faces, cells, gables } = this.fillRegionAt(mouseToNdc(e, this.domElement), worldPoint);
+      const { faces, cells, gables, fences } = this.fillRegionAt(mouseToNdc(e, this.domElement), worldPoint);
       if (gables) gables.pick.model.batch(() => { for (const strip of gables.strips) this.paintGable(gables.pick.model, strip); });
       this.model.batch(() => {
+        for (const fence of fences ?? []) this.paintFence(fence);
         for (const face of faces) this.model.paintWallFace(face.x, face.z, face.dir, face.facing, this.selectedPaintColor);
         for (const { x, z } of cells) this.model.paintFloor(x, z, this.selectedPaintColor);
       });
@@ -874,6 +1002,7 @@ export class ToolController {
         if (this.paintTarget === 'wall') {
           const spot = this.paintSpotAt(sample);
           if (spot?.kind === 'wall') this.model.paintWallFace(spot.face.x, spot.face.z, spot.face.dir, spot.face.facing, this.selectedPaintColor);
+          else if (spot?.kind === 'fence') this.paintFence(spot.fence);
           else if (spot) this.paintGable(spot.gable.model, spot.gable.strip);
         } else {
           const point = raycastGround(sample, this.getCamera(), this.height);
@@ -899,6 +1028,11 @@ export class ToolController {
     if (this.paintTarget === 'wall') {
       const spot = this.paintSpotAt(ndc);
       if (!spot) return { key: 'none', faces: [], cells: [] };
+      if (spot.kind === 'fence') {
+        const key = `fence|${wallKey(spot.fence.x, spot.fence.z, spot.fence.dir)}`;
+        if (this.fillPreview?.key === key) return this.fillPreview;
+        return { key, faces: [], cells: [], fences: this.fenceRun(spot.fence) };
+      }
       if (spot.kind === 'gable') {
         const { model, strip } = spot.gable;
         // Which floor's roof it's on shows in how high the roof sits.
@@ -950,7 +1084,8 @@ export class ToolController {
     const spot = this.paintSpotAt(ndc, false);
     const cell = worldToCell(worldPoint.x, worldPoint.z);
     if (!spot && !this.model.hasFloor(cell.x, cell.z)) return;
-    this.selectedPaintColor = spot?.kind === 'wall' ? this.wallColorOf(spot.face) : spot ? gableColor(spot.gable.model, spot.gable.strip) : this.floorColorAt(cell);
+    this.selectedPaintColor =
+      spot?.kind === 'wall' ? this.wallColorOf(spot.face) : spot?.kind === 'fence' ? spot.fence.color ?? fenceColor(spot.fence.style) : spot ? gableColor(spot.gable.model, spot.gable.strip) : this.floorColorAt(cell);
     this.paintTarget = spot ? 'wall' : 'floor';
     this.setPaintMethod(this.methodBeforeSample);
     // Otherwise moving the mouse before letting go would start painting with the new color.
@@ -1106,6 +1241,8 @@ export class ToolController {
     raycaster.setFromCamera(ndc, this.getCamera());
     const wall = this.wallHit(raycaster);
     const gable = this.gablePicker?.(raycaster) ?? null;
+    const fence = this.fenceAt(ndc);
+    if (fence && (!wall || fence.distance < wall.distance) && (!gable || fence.distance < gable.distance)) return { kind: 'fence', fence };
     if (gable && (!wall || gable.distance < wall.distance)) return { kind: 'gable', gable };
     if (wall) return { kind: 'wall', face: wall.face };
     const face = orGround ? this.wallFaceAt(ndc) : null;
@@ -1183,6 +1320,8 @@ export class ToolController {
       this.model.batch(() => {
         for (const { x, z, dir } of this.dragWallKeys.values()) this.model.setFence(x, z, dir, this.selectedFenceStyle);
       });
+    } else if (this.activeTool === 'fence' && this.fencePressed && !this.dragErasing) {
+      this.restyleFence(this.fencePressed);
     } else if (this.activeTool === 'window' && this.dragWallKeys.size > 0) {
       this.model.batch(() => {
         for (const { x, z, dir } of this.dragWallKeys.values()) {
@@ -1232,6 +1371,7 @@ export class ToolController {
             id = this.model.addFurniture(type, x, z, rotation);
             const color = this.placingColor(type);
             if (color) this.model.setFurnitureColor(id, color);
+            if (getFurnitureDef(type).grows) this.model.plantFurniture(id, gameDay());
           });
           this.announceStairs(id);
         }
@@ -1266,6 +1406,7 @@ export class ToolController {
     else if (target.kind === 'aperture') this.model.removeAperture(target.x, target.z, target.dir);
     else if (target.kind === 'wall') this.model.removeWall(target.x, target.z, target.dir);
     else if (target.kind === 'fence') this.model.removeFence(target.x, target.z, target.dir);
+    else if (target.kind === 'railing') this.model.removeRailing(target.x, target.z, target.dir);
     else if (target.kind === 'mess') this.messes?.remove(target.id);
     else if (target.kind === 'pool') this.model.removePool(target.x, target.z);
     else this.model.removeFloor(target.x, target.z);
@@ -1310,6 +1451,8 @@ export class ToolController {
 
     const edge = worldToEdge(worldPoint.x, worldPoint.z);
     if (this.model.hasFence(edge.x, edge.z, edge.dir)) return { kind: 'fence', ...edge };
+    const railing = this.fenceAt(mouseToNdc(e, this.domElement));
+    if (railing?.auto) return { kind: 'railing', x: railing.x, z: railing.z, dir: railing.dir };
 
     if (this.model.hasFloor(cx, cz)) return { kind: 'floor', x: cx, z: cz };
     if (this.model.hasPool(cx, cz)) return { kind: 'pool', x: cx, z: cz };
@@ -1408,7 +1551,8 @@ export class ToolController {
 
     const hoverCell = worldToCell(worldPoint.x, worldPoint.z);
     // While placing, only what the new piece would clash with counts, so a chair can still go down on a rug.
-    const held = this.activeTool === 'furniture' ? this.selectedFurnitureType : null;
+    // With the eyedropper, nothing's in hand: it points at pieces to pick up.
+    const held = this.activeTool === 'furniture' && !this.isPickingFurniture(e) ? this.selectedFurnitureType : null;
     // While carrying, R and Delete act on what's in hand, not what's under it.
     if (this.carried) this.hoveredFurniture = undefined;
     else this.hoveredFurniture = held ? this.findFurnitureAt(hoverCell.x, hoverCell.z, layerOf(held)) : this.pieceUnderCursor(e) ?? this.findFurnitureAt(hoverCell.x, hoverCell.z);
@@ -1430,6 +1574,16 @@ export class ToolController {
         }
         const corner = worldToCorner(worldPoint.x, worldPoint.z);
         if (isCornerInLot(corner.x, corner.z)) this.preview.showCornerStick(corner.x, corner.z);
+        // A fence in another style can be clicked to change it to this one.
+        const fence = e.ctrlKey || e.metaKey ? null : this.fenceAt(mouseToNdc(e, this.domElement));
+        if (fence && fence.style !== this.selectedFenceStyle) this.preview.showWallGhosts([fence], RING_COLOR, FENCE_GHOST_HEIGHT);
+        break;
+      }
+      case 'roof': {
+        // A room at a time: the room a click would roof.
+        if (this.roofForRoom === undefined) break;
+        const room = this.roomCellsAt(this.roofCellAt(e) ?? hoverCell);
+        if (room.length > 0) this.preview.showCellRegion(room, RING_COLOR);
         break;
       }
       case 'pool': {
@@ -1481,7 +1635,7 @@ export class ToolController {
           const piece = this.hoveredFurniture;
           if (piece) {
             const offset = getFootprintCenterOffset(piece.type, piece.rotation);
-            this.preview.showRing(piece.x + offset.dx, piece.z + offset.dz);
+            this.preview.showRing(piece.x + offset.dx, piece.z + offset.dz, this.isPickingFurniture(e) ? PICK_COLOR : undefined);
           }
         } else if (!this.hoveredFurniture) {
           const rotation = this.wallFacingRotation(held, x, z, this.placementRotation);
@@ -1519,7 +1673,7 @@ export class ToolController {
       const offset = getFootprintCenterOffset(target.type, target.rotation);
       this.preview.showRing(target.x + offset.dx, target.z + offset.dz, DELETE_COLOR);
     } else if (target?.kind === 'wall' || target?.kind === 'aperture') this.preview.showWallGhosts([target], DELETE_COLOR);
-    else if (target?.kind === 'fence') this.preview.showWallGhosts([target], DELETE_COLOR, FENCE_GHOST_HEIGHT);
+    else if (target?.kind === 'fence' || target?.kind === 'railing') this.preview.showWallGhosts([target], DELETE_COLOR, FENCE_GHOST_HEIGHT);
     else if (target?.kind === 'pillar') this.preview.showPillarGhost(target.x, target.z, target.style, DELETE_COLOR);
     else if (target?.kind === 'floor') this.preview.showFloorGhosts([target], DELETE_COLOR);
     else if (target?.kind === 'mess') this.preview.showRing(target.x, target.z, DELETE_COLOR);
@@ -1537,6 +1691,7 @@ export class ToolController {
     if (this.paintMethod === 'sample') {
       const spot = this.paintSpotAt(ndc, false);
       if (spot?.kind === 'wall') this.preview.showWallFaceGhost(spot.face, RING_COLOR);
+      else if (spot?.kind === 'fence') this.preview.showWallGhosts([spot.fence], RING_COLOR, FENCE_GHOST_HEIGHT);
       else if (spot) this.preview.showGableGhost(spot.gable.strip, spot.gable.toWorld, RING_COLOR);
       else if (this.model.hasFloor(cell.x, cell.z)) this.preview.showFloorGhosts([cell], RING_COLOR);
     } else if (this.paintMethod === 'bucket') {
@@ -1544,10 +1699,12 @@ export class ToolController {
       for (const face of this.fillPreview.faces) this.preview.showWallFaceGhost(face, color);
       const gables = this.fillPreview.gables;
       for (const strip of gables?.strips ?? []) this.preview.showGableGhost(strip, gables!.pick.toWorld, color);
+      if (this.fillPreview.fences?.length) this.preview.showWallGhosts(this.fillPreview.fences, color, FENCE_GHOST_HEIGHT);
       if (this.fillPreview.cells.length > 0) this.preview.showCellRegion(this.fillPreview.cells, color);
     } else if (this.paintTarget === 'wall') {
       const spot = this.paintSpotAt(ndc);
       if (spot?.kind === 'wall') this.preview.showWallFaceGhost(spot.face, color);
+      else if (spot?.kind === 'fence') this.preview.showWallGhosts([spot.fence], color, FENCE_GHOST_HEIGHT);
       else if (spot) this.preview.showGableGhost(spot.gable.strip, spot.gable.toWorld, color);
     } else if (this.model.hasFloor(cell.x, cell.z)) {
       this.preview.showFloorGhosts([cell], color);

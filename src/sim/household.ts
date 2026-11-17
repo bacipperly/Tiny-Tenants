@@ -688,6 +688,12 @@ export class Household {
 
   /** A door is free to whoever asks first. Once crossing, a pawn never waits, so two pawns can't end up waiting on each other. */
   private claimDoor(pawn: Pawn, door: string): boolean {
+    // A proper flight of stairs is wide enough to pass on, so everyone shares it, brushing past as they would anywhere.
+    // A ship ladder, one square up, is still one at a time.
+    if (door.startsWith('stairs:')) {
+      const flight = this.world.flights().find((each) => `stairs:${each.id}` === door);
+      if (flight && flight.steps.length > 1) return true;
+    }
     const holder = this.doorHolders.get(door);
     if (holder && holder !== pawn) return false;
     this.doorHolders.set(door, pawn);

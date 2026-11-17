@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { Direction, GridModel } from '../grid/gridModel';
 import { CELL_SIZE, WALL_HEIGHT, cellToWorld, cornerToWorld } from '../grid/gridMath';
-import type { FlatRoofFinish, RoofLook, RoofMaterial } from '../grid/house';
+import type { FlatRoofFinish, RoofLook, RoofMaterial, RoofPitch } from '../grid/house';
 import { WALL_COLOR } from './wallBuilder';
 import { disposeTree } from '../scene/dispose';
 import { ROOF_TILE_CELLS, flatTexture, pitchedTexture } from './roofTextures';
@@ -10,7 +10,7 @@ const SLAB_THICKNESS = 0.12;
 /** Each cell's slab is wider than the cell, which makes the eaves; slabs inside the roof just overlap. */
 const SLAB_WIDTH = CELL_SIZE * 1.3;
 /** How steep a pitched roof is: how much it rises for each square in from its edge. */
-const PITCH = 0.5;
+const PITCHES: Record<RoofPitch, number> = { low: 0.3, medium: 0.5, steep: 0.85 };
 /** A pitched roof starts just above the tops of the walls. */
 const PITCHED_BASE = WALL_HEIGHT + 0.02;
 /** How far a pitched roof's eaves reach out past the walls. */
@@ -83,19 +83,28 @@ export class RoofBuilder {
   private built = '';
 
   /** `covered` is the squares the floor above is built over, or where stairs go up through it, which need no roof. */
-  rebuild(model: GridModel, covered: ReadonlySet<string> = new Set(), look: RoofLook = { style: 'flat', material: 'slate', flat: 'gravel' }) {
+  rebuild(model: GridModel, covered: ReadonlySet<string> = new Set(), look: RoofLook = { style: 'flat', material: 'slate', flat: 'gravel', pitch: 'medium' }) {
     const { style } = look;
     const cells = model.allRooms().flatMap((room) => room.cells).filter((cell) => !covered.has(key(cell.x, cell.z)));
+    // The roof's color is only a tint on its covering, which needs nothing rebuilt.
+    const tint = roofTint(look.color);
+    for (const material of [...this.flatMaterials.values(), ...this.pitchedMaterials.values()]) material.color.copy(tint);
     // Repainting doesn't change the rooms, and this runs for every tile of a paint drag.
-    const built = `${style}|${look.material}|${look.flat}|${cells.map((cell) => key(cell.x, cell.z)).sort().join(';')}`;
+    // Squares can be roofed in a style of their own, a room at a time.
+    const styleAt = (cell: Cell) => model.roofAreaAt(cell.x, cell.z) ?? style;
+    const built = `${style}|${look.material}|${look.flat}|${look.pitch}|${cells.map((cell) => `${key(cell.x, cell.z)}:${styleAt(cell)}`).sort().join(';')}`;
     if (built !== this.built) {
       this.built = built;
       disposeTree(this.group, new Set([this.slab, ...this.flatMaterials.values(), ...this.pitchedMaterials.values(), this.gableMaterial]));
       this.group.clear();
       this.gables = [];
-      if (style === 'flat') {
-        if (cells.length > 0) this.buildFlat(cells, this.flatMaterial(look.flat));
-      } else for (const piece of connectedPieces(cells)) this.buildPitched(piece, style, this.pitchedMaterial(look.material));
+      // Each style's squares are roofed on their own: where a hip room meets a flat one, the hip slopes down to an eave above the wall between.
+      for (const each of ['flat', 'hip', 'gable'] as const) {
+        const mine = cells.filter((cell) => styleAt(cell) === each);
+        if (mine.length === 0) continue;
+        if (each === 'flat') this.buildFlat(mine, this.flatMaterial(look.flat, tint));
+        else for (const piece of connectedPieces(mine)) this.buildPitched(piece, each, this.pitchedMaterial(look.material, tint), PITCHES[look.pitch]);
+      }
     }
     // Paint on the walls, or on the gables themselves, only changes the gables' colors.
     this.colorGables(model);
@@ -113,16 +122,17 @@ export class RoofBuilder {
     }
   }
 
-  private flatMaterial(finish: FlatRoofFinish): THREE.MeshStandardMaterial {
+  private flatMaterial(finish: FlatRoofFinish, tint: THREE.Color): THREE.MeshStandardMaterial {
     let material = this.flatMaterials.get(finish);
     if (!material) {
       material = new THREE.MeshStandardMaterial({ map: flatTexture(finish), side: THREE.DoubleSide });
       this.flatMaterials.set(finish, material);
     }
+    material.color.copy(tint);
     return material;
   }
 
-  private pitchedMaterial(covering: RoofMaterial): THREE.MeshStandardMaterial {
+  private pitchedMaterial(covering: RoofMaterial, tint: THREE.Color): THREE.MeshStandardMaterial {
     let material = this.pitchedMaterials.get(covering);
     if (!material) {
       material = new THREE.MeshStandardMaterial({ map: pitchedTexture(covering), side: THREE.DoubleSide, vertexColors: true });
@@ -131,6 +141,7 @@ export class RoofBuilder {
       if (covering === 'thatch') material.roughness = 1;
       this.pitchedMaterials.set(covering, material);
     }
+    material.color.copy(tint);
     return material;
   }
 
@@ -146,12 +157,12 @@ export class RoofBuilder {
   }
 
   /** One roof over one connected stretch of rooms. */
-  private buildPitched(cells: Cell[], style: 'hip' | 'gable', material: THREE.Material) {
+  private buildPitched(cells: Cell[], style: 'hip' | 'gable', material: THREE.Material, pitch: number) {
     const inside = new Set(cells.map((cell) => key(cell.x, cell.z)));
     const height = style === 'hip' ? hipHeights(cells, inside) : gableHeights(cells, inside);
     const at = (x: number, z: number) => {
       const corner = cornerToWorld(x, z);
-      return new THREE.Vector3(corner.x, PITCHED_BASE + (height.get(key(x, z)) ?? 0) * PITCH, corner.z);
+      return new THREE.Vector3(corner.x, PITCHED_BASE + (height.get(key(x, z)) ?? 0) * pitch, corner.z);
     };
     const base = (x: number, z: number) => {
       const corner = cornerToWorld(x, z);
@@ -186,7 +197,7 @@ export class RoofBuilder {
         }
         // An eave: the slope carries on down and out past the wall.
         const out = new THREE.Vector3(px === qx ? Math.sign(px - x - 0.5) : 0, 0, pz === qz ? Math.sign(pz - z - 0.5) : 0);
-        const drop = new THREE.Vector3(0, -EAVE * PITCH, 0);
+        const drop = new THREE.Vector3(0, -EAVE * pitch, 0);
         const pOut = p.clone().addScaledVector(out, EAVE).add(drop);
         const qOut = q.clone().addScaledVector(out, EAVE).add(drop);
         roof.push(p, pOut, qOut, p, qOut, q);
@@ -500,4 +511,16 @@ function maximalRectangles(inside: ReadonlySet<string>, box: Rect): Rect[] {
     if (!grows) found.set(rectKey(r), r);
   }
   return [...found.values()];
+}
+
+/**
+ * The tint a roof color puts on its covering. The covering's picture already
+ * has its own shading, so the color is scaled up until its brightest channel
+ * is full: a red roof is as bright as the slate it's painted on, just red.
+ */
+function roofTint(color: string | undefined): THREE.Color {
+  if (!color) return new THREE.Color(1, 1, 1);
+  const tint = new THREE.Color(color);
+  const top = Math.max(tint.r, tint.g, tint.b, 0.05);
+  return tint.multiplyScalar(Math.min(2.2, 1 / top));
 }

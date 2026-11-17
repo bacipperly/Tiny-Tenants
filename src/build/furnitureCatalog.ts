@@ -92,6 +92,8 @@ export interface FurnitureDef {
   height: number;
   /** A bunk bed: the top of its upper mattress, where a second sleeper lies above the first. */
   bunk?: number;
+  /** Planted small, it grows in to full size over a few days. */
+  grows?: boolean;
   /** Swings gently from side to side while someone lies in it, like a hammock, and they swing with it. */
   swings?: boolean;
   use: FurnitureUseKind;
@@ -2613,7 +2615,7 @@ export const FURNITURE_CATALOG: FurnitureDef[] = [
   },
   {
     type: 'hedge', label: 'Hedge', emoji: '🟩', category: 'outdoor', footprint: { w: 2, d: 1 }, color: 0x3f7f3a, height: 0.8, use: 'stand',
-    thoughts: ['🌿', '✂️', '🍃'], advertises: { fun: 2 }, activity: 'admire',
+    thoughts: ['🌿', '✂️', '🍃'], advertises: { fun: 2 }, activity: 'admire', grows: true,
     parts: [box(1.85, 0.75, 0.7), box(1.8, 0.08, 0.65, 0, 0.75, 0, 0x4a8f42)],
   },
   {

@@ -21,6 +21,9 @@ const POOL_OPACITY_EXTRA_IN_DARK = 0.5;
 const HALO_OPACITY = 0.55;
 /** How hard lamps near each other hold back, so a cluster is brighter than one lamp but nowhere near all of them added up. */
 const CROWD_DAMPING = 1;
+/** At night a lamp's light counts for more: its pool and halo grow this much stronger, and the real light this much brighter. */
+const NIGHT_POOL_BOOST = 1.4;
+const NIGHT_LIGHT_BOOST = 0.8;
 
 let glowTexture: THREE.CanvasTexture | null = null;
 
@@ -63,6 +66,14 @@ export class FurnitureLights {
   private placed: PlacedLight[] = [];
   private hiddenId: string | null = null;
   private allPieces: FurniturePiece[] = [];
+  /** How far into the night it is, from 0 to 1. */
+  private night = 0;
+  private shownNight = -1;
+
+  /** How far into the night it is: lamps glow brighter the darker it gets. */
+  setNight(amount: number) {
+    this.night = amount;
+  }
 
   /** `realLights` is how many of its lamps may be real lights. The rest only glow, on the floor and around the bulb. */
   rebuild(model: GridModel, roomLight: RoomLight, realLights = MAX_REAL_LIGHTS) {
@@ -116,6 +127,7 @@ export class FurnitureLights {
 
       this.placed.push({ pieceId: piece.id, source, light, pool, halo, poolOpacity, share, phase: piece.x * 1.3 + piece.z * 2.1 });
     }
+    this.shownNight = -1;
     this.setHidden(this.hiddenId);
   }
 
@@ -133,13 +145,24 @@ export class FurnitureLights {
 
   /** Call every frame with the time in seconds, so a fire's light dances. */
   animate(time: number) {
+    // Steady lamps only need changing when the night does.
+    const nightChanged = Math.abs(this.night - this.shownNight) > 0.005;
+    if (nightChanged) this.shownNight = this.night;
+    const poolBoost = 1 + NIGHT_POOL_BOOST * this.night;
+    const lightBoost = 1 + NIGHT_LIGHT_BOOST * this.night;
     for (const { source, light, pool, halo, poolOpacity, share, phase } of this.placed) {
-      if (!source.flicker) continue;
+      if (!source.flicker) {
+        if (!nightChanged) continue;
+        if (light) light.intensity = source.strength * share * lightBoost;
+        pool.material.opacity = Math.min(1, poolOpacity * poolBoost);
+        halo.material.opacity = Math.min(1, HALO_OPACITY * Math.sqrt(share) * (1 + 0.5 * this.night));
+        continue;
+      }
       const t = time + phase;
       const flicker = 1 + 0.16 * Math.sin(t * 9.3) + 0.09 * Math.sin(t * 23.1) + 0.06 * Math.sin(t * 4.7);
-      if (light) light.intensity = source.strength * share * flicker;
-      pool.material.opacity = poolOpacity * flicker;
-      halo.material.opacity = HALO_OPACITY * Math.sqrt(share) * flicker;
+      if (light) light.intensity = source.strength * share * flicker * lightBoost;
+      pool.material.opacity = Math.min(1, poolOpacity * flicker * poolBoost);
+      halo.material.opacity = Math.min(1, HALO_OPACITY * Math.sqrt(share) * flicker * (1 + 0.5 * this.night));
       halo.scale.setScalar(source.halo * (0.94 + 0.06 * flicker));
     }
   }

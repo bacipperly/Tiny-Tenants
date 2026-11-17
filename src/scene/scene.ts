@@ -8,9 +8,11 @@ export function createScene(): THREE.Scene {
   scene.background = new THREE.Color(0xbfe3f0);
 
   const hemi = new THREE.HemisphereLight(0xffffff, 0x6b7a8f, 1.1);
+  hemi.name = 'sky';
   scene.add(hemi);
 
   const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+  sun.name = 'sun';
   sun.position.set(6, 10, 4);
   sun.castShadow = false;
   scene.add(sun);

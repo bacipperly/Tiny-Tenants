@@ -47,6 +47,14 @@ const LOOKS: Record<FenceStyle, StyleLook> = {
     post: { size: [0.1, 1.62, 0.1], at: [0, 0, 0], color: DARK_WOOD },
     panel: () => spaced(6, (x, i) => ({ size: [0.155, 1.52, 0.04], at: [x, 0.04, 0], color: i % 2 === 0 ? 0xa47b52 : 0x9a7149 })),
   },
+  // Waist high and solid, like a wall cut down, with a ledge along the top to set things on.
+  'half-wall': {
+    post: { size: [0.16, 1.02, 0.16], at: [0, 0, 0], color: 0xece6da },
+    panel: () => [
+      { size: [1, 0.96, 0.14], at: [0, 0, 0], color: 0xece6da },
+      { size: [1.02, 0.06, 0.24], at: [0, 0.96, 0], color: 0xd9d0bf },
+    ],
+  },
   stone: {
     post: { size: [0.34, 0.6, 0.34], at: [0, 0, 0], color: 0x8d8a84 },
     panel: () => [
@@ -123,7 +131,7 @@ export class FenceBuilder {
   /** `auto` is the railings drawn for you, each in the style its tile was laid with. */
   rebuild(model: GridModel, auto: { x: number; z: number; dir: Direction; style: FenceStyle }[]) {
     const fences: FenceSegment[] = [...model.allFences(), ...auto];
-    const built = fences.map((fence) => `${wallKey(fence.x, fence.z, fence.dir)}:${fence.style}:${fence.gate ? 1 : 0}`).sort().join(';');
+    const built = fences.map((fence) => `${wallKey(fence.x, fence.z, fence.dir)}:${fence.style}:${fence.gate ? 1 : 0}:${fence.color ?? ''}`).sort().join(';');
     if (built === this.built) return;
     this.built = built;
     disposeTree(this.group, new Set([this.solidMaterial, this.glassMaterial]));
@@ -132,11 +140,11 @@ export class FenceBuilder {
 
     const solid: THREE.BufferGeometry[] = [];
     const glass: THREE.BufferGeometry[] = [];
-    const add = (box: Box, place: THREE.Matrix4) => {
+    const add = (box: Box, place: THREE.Matrix4, paint?: { style: FenceStyle; color?: string }) => {
       const shape = new THREE.BoxGeometry(...box.size);
       shape.translate(box.at[0], box.at[1] + box.size[1] / 2, box.at[2]);
       shape.applyMatrix4(place);
-      const color = new THREE.Color(box.color);
+      const color = boxColor(box, paint);
       const colors = new Float32Array(shape.getAttribute('position').count * 3);
       for (let i = 0; i < colors.length; i += 3) color.toArray(colors, i);
       shape.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -144,7 +152,7 @@ export class FenceBuilder {
     };
 
     // A post at every corner a fence ends at, once, in the style of the first fence there.
-    const posts = new Map<string, { at: THREE.Vector3; post: Box; turn: number }>();
+    const posts = new Map<string, { at: THREE.Vector3; post: Box; turn: number; paint: { style: FenceStyle; color?: string } }>();
     for (const fence of fences) {
       const look = LOOKS[fence.style];
       const mid = edgeMidpointWorld(fence.x, fence.z, fence.dir);
@@ -152,7 +160,7 @@ export class FenceBuilder {
       if (look.post) {
         for (const end of edgeEnds(fence.x, fence.z, fence.dir)) {
           const key = `${end.x.toFixed(2)},${end.z.toFixed(2)}`;
-          if (!posts.has(key)) posts.set(key, { at: end, post: look.post, turn });
+          if (!posts.has(key)) posts.set(key, { at: end, post: look.post, turn, paint: fence });
         }
       }
       if (fence.gate) {
@@ -160,9 +168,9 @@ export class FenceBuilder {
         continue;
       }
       const place = new THREE.Matrix4().makeRotationY(turn).setPosition(mid.x, 0, mid.z);
-      for (const box of look.panel()) add(box, place);
+      for (const box of look.panel()) add(box, place, fence);
     }
-    for (const { at, post, turn } of posts.values()) add(post, new THREE.Matrix4().makeRotationY(turn).setPosition(at.x, 0, at.z));
+    for (const { at, post, turn, paint } of posts.values()) add(post, new THREE.Matrix4().makeRotationY(turn).setPosition(at.x, 0, at.z), paint);
 
     if (solid.length > 0) this.group.add(new THREE.Mesh(mergeAndDispose(solid), this.solidMaterial));
     if (glass.length > 0) this.group.add(new THREE.Mesh(mergeAndDispose(glass), this.glassMaterial));
@@ -181,7 +189,7 @@ export class FenceBuilder {
     for (const box of [...look.panel(), { size: [0.85, 0.05, 0.04], at: [0, 0.4, 0.03], color: look.post?.color ?? WOOD } as Box]) {
       const shape = new THREE.BoxGeometry(box.size[0] * 0.9, box.size[1], box.size[2]);
       shape.translate(0.5 + box.at[0] * 0.9, box.at[1] + box.size[1] / 2, box.at[2]);
-      const color = new THREE.Color(box.color);
+      const color = boxColor(box, fence);
       const colors = new Float32Array(shape.getAttribute('position').count * 3);
       for (let i = 0; i < colors.length; i += 3) color.toArray(colors, i);
       shape.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -219,4 +227,31 @@ function mergeAndDispose(shapes: THREE.BufferGeometry[]): THREE.BufferGeometry {
   const merged = mergeGeometries(shapes);
   for (const shape of shapes) shape.dispose();
   return merged;
+}
+
+/** The color a style's fence reads as at a glance: its posts, or its lightest part. What the eyedropper picks up from an unpainted fence. */
+export function fenceColor(style: FenceStyle): string {
+  return `#${new THREE.Color(mainColor(style)).getHexString()}`;
+}
+
+function mainColor(style: FenceStyle): number {
+  const look = LOOKS[style];
+  const parts = [...(look.post ? [look.post] : []), ...look.panel()].filter((box) => !box.glass);
+  return parts.reduce((best, box) => (luminance(box.color) > luminance(best) ? box.color : best), parts[0].color);
+}
+
+function luminance(color: number): number {
+  const c = new THREE.Color(color);
+  return 0.3 * c.r + 0.59 * c.g + 0.11 * c.b;
+}
+
+/**
+ * One part's color. Painted, every part takes the paint, each a little darker
+ * or lighter than it was against the style's lightest part, so rails, slats
+ * and posts still read apart. Glass stays glass.
+ */
+function boxColor(box: Box, paint?: { style: FenceStyle; color?: string }): THREE.Color {
+  if (!paint?.color || box.glass) return new THREE.Color(box.color);
+  const shade = Math.min(1.1, Math.max(0.6, luminance(box.color) / Math.max(0.05, luminance(mainColor(paint.style)))));
+  return new THREE.Color(paint.color).multiplyScalar(shade);
 }

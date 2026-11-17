@@ -9,6 +9,10 @@ const SHOWCASE_DEGREES_PER_SECOND = 4;
 /** How far the house moves right on the start screen, as a share of the screen's width, and how wide (to tall) the screen has to be for it. */
 const SHOWCASE_SHIFT = 0.17;
 const SHOWCASE_MIN_ASPECT = 1.1;
+/** The 3D camera: its field of view, how far it can tilt, and how near and far it can zoom. */
+const PERSPECTIVE_FOV = 40;
+const PITCH_RANGE = { min: 12, max: 82 };
+const DISTANCE_RANGE = { min: 6, max: 90 };
 
 /**
  * Isometric camera rig for v1. Kept behind this small interface (rotate, zoom,
@@ -28,13 +32,58 @@ export class IsoCameraRig {
   private viewSize = 10; // half-height of the orthographic frustum in world units
   private aspect = 1;
 
+  /** The free 3D camera, with perspective, which can turn any way round the house and tilt up and down. */
+  private perspectiveCamera = new THREE.PerspectiveCamera(PERSPECTIVE_FOV, 1, 0.1, 800);
+  private perspective = false;
+  /** In 3D: how far it's turned past the quarter turns, how high it looks down from, in degrees, and how far away it is. */
+  private freeYaw = 0;
+  private pitch = 35.264;
+  private distance = 26;
+
   constructor() {
     this.camera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 600);
     this.updatePosition();
   }
 
-  getCamera(): THREE.OrthographicCamera {
-    return this.camera;
+  getCamera(): THREE.OrthographicCamera | THREE.PerspectiveCamera {
+    return this.perspective ? this.perspectiveCamera : this.camera;
+  }
+
+  /** Whether the free 3D camera is on. */
+  get isPerspective(): boolean {
+    return this.perspective;
+  }
+
+  /**
+   * Switches between the usual flat, square-on view and a free 3D camera with
+   * perspective, which turns any way round the house and tilts up and down.
+   * Going back puts the view square again.
+   */
+  setPerspective(on: boolean) {
+    if (on === this.perspective) return;
+    this.perspective = on;
+    if (on) {
+      // About the same amount of the house in view as before.
+      this.distance = Math.min(DISTANCE_RANGE.max, Math.max(DISTANCE_RANGE.min, this.viewSize * 2.7));
+      this.pitch = this.elevationDeg;
+    } else {
+      this.freeYaw = 0;
+    }
+    this.applyFrustum();
+    this.updatePosition();
+  }
+
+  /** In 3D, turns round the house and tilts up or down, by degrees. */
+  orbit(turn: number, tilt: number) {
+    if (!this.perspective) return;
+    this.freeYaw = (this.freeYaw + turn) % 360;
+    this.pitch = Math.min(PITCH_RANGE.max, Math.max(PITCH_RANGE.min, this.pitch + tilt));
+    this.updatePosition();
+  }
+
+  /** Which way the camera looks from, in degrees round the house: the quarter turns, the start screen's slow turn, and in 3D any turn at all. */
+  private get yawDegrees(): number {
+    return 45 + this.yawIndex * 90 + this.spin + this.freeYaw;
   }
 
   /** Jumps to look at this point, at the height of the floor being looked at. */
@@ -99,6 +148,8 @@ export class IsoCameraRig {
 
   resize(width: number, height: number) {
     this.aspect = width / height;
+    this.perspectiveCamera.aspect = this.aspect;
+    this.perspectiveCamera.updateProjectionMatrix();
     this.applyFrustum();
   }
 
@@ -113,11 +164,21 @@ export class IsoCameraRig {
   }
 
   zoomIn() {
+    if (this.perspective) {
+      this.distance = Math.max(DISTANCE_RANGE.min, this.distance * 0.88);
+      this.updatePosition();
+      return;
+    }
     this.viewSize = Math.max(3, this.viewSize - 1.5);
     this.applyFrustum();
   }
 
   zoomOut() {
+    if (this.perspective) {
+      this.distance = Math.min(DISTANCE_RANGE.max, this.distance / 0.88);
+      this.updatePosition();
+      return;
+    }
     this.viewSize = Math.min(30, this.viewSize + 1.5);
     this.applyFrustum();
   }
@@ -125,7 +186,7 @@ export class IsoCameraRig {
   /** Moves the view along the ground, by screen-space amounts: positive right and positive up, away from the camera. */
   pan(right: number, up: number) {
     this.glideTarget = null;
-    const theta = THREE.MathUtils.degToRad(45 + this.yawIndex * 90);
+    const theta = THREE.MathUtils.degToRad(this.yawDegrees);
     const sin = Math.sin(theta);
     const cos = Math.cos(theta);
     this.pivot.x = this.clampToPanLimit(this.pivot.x + right * cos - up * sin);
@@ -135,14 +196,16 @@ export class IsoCameraRig {
 
   /** Drags the ground along with the cursor, so a pixel moved on screen is the same distance on the ground. */
   panByPixels(dx: number, dy: number, screenHeight: number) {
-    const worldPerPixel = (this.viewSize * 2) / screenHeight;
-    const groundForeshortening = Math.sin(THREE.MathUtils.degToRad(this.elevationDeg));
+    // In 3D, a pixel covers more ground the further away the camera is.
+    const viewHeight = this.perspective ? 2 * this.distance * Math.tan(THREE.MathUtils.degToRad(PERSPECTIVE_FOV / 2)) : this.viewSize * 2;
+    const worldPerPixel = viewHeight / screenHeight;
+    const groundForeshortening = Math.sin(THREE.MathUtils.degToRad(this.perspective ? this.pitch : this.elevationDeg));
     this.pan(-dx * worldPerPixel, (dy * worldPerPixel) / groundForeshortening);
   }
 
   /** How far the view moves per second with the movement keys, which stays comfortable at any zoom. */
   get keyPanSpeed(): number {
-    return this.viewSize * 1.2;
+    return this.perspective ? this.distance * 0.45 : this.viewSize * 1.2;
   }
 
   private clampToPanLimit(value: number): number {
@@ -153,20 +216,23 @@ export class IsoCameraRig {
   /** Normalized horizontal (XZ) direction from the pivot toward the camera.
    * Used to decide which walls face the camera and should be hidden. */
   getCameraDirXZ(): THREE.Vector2 {
-    const theta = THREE.MathUtils.degToRad(45 + this.yawIndex * 90 + this.spin);
+    const theta = THREE.MathUtils.degToRad(this.yawDegrees);
     return new THREE.Vector2(Math.sin(theta), Math.cos(theta));
   }
 
   private updatePosition() {
-    const theta = THREE.MathUtils.degToRad(45 + this.yawIndex * 90 + this.spin);
-    const elevation = THREE.MathUtils.degToRad(this.elevationDeg);
-    const horizontal = this.radius * Math.cos(elevation);
-    const vertical = this.radius * Math.sin(elevation);
+    const theta = THREE.MathUtils.degToRad(this.yawDegrees);
+    const elevation = THREE.MathUtils.degToRad(this.perspective ? this.pitch : this.elevationDeg);
+    // The flat view stands far off, which makes no difference to it; the 3D camera is only as far away as it's zoomed.
+    const radius = this.perspective ? this.distance : this.radius;
+    const horizontal = radius * Math.cos(elevation);
+    const vertical = radius * Math.sin(elevation);
     const x = this.pivot.x + horizontal * Math.sin(theta);
     const z = this.pivot.z + horizontal * Math.cos(theta);
     const y = this.pivot.y + vertical;
-    this.camera.position.set(x, y, z);
-    this.camera.lookAt(this.pivot);
+    const camera = this.getCamera();
+    camera.position.set(x, y, z);
+    camera.lookAt(this.pivot);
   }
 
   private applyFrustum() {
@@ -178,8 +244,10 @@ export class IsoCameraRig {
     this.camera.bottom = -halfHeight;
     // On the start screen, the house slides right, out from behind the card on the left, on a screen wide enough to have room.
     const shift = this.spinning && this.aspect > SHOWCASE_MIN_ASPECT ? SHOWCASE_SHIFT : 0;
-    if (shift) this.camera.setViewOffset(1000, 1000, -shift * 1000, 0, 1000, 1000);
-    else this.camera.clearViewOffset();
-    this.camera.updateProjectionMatrix();
+    for (const camera of [this.camera, this.perspectiveCamera]) {
+      if (shift) camera.setViewOffset(1000, 1000, -shift * 1000, 0, 1000, 1000);
+      else camera.clearViewOffset();
+      camera.updateProjectionMatrix();
+    }
   }
 }

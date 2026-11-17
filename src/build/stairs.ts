@@ -6,6 +6,20 @@ const WOOD = 0x8a6440;
 const TREAD = 0xc9a274;
 const RAIL = 0x5b3f26;
 const IRON = 0x3d4148;
+/** With a finish picked, the steps' sides are this much darker than their treads. */
+const BODY_SHADE = 0.78;
+
+/** What stairs can be finished in, beyond their own wood: the color their treads take, the sides a shade darker. */
+export const STAIR_FINISHES: { label: string; color: string | null }[] = [
+  { label: 'Wood', color: null },
+  { label: 'Pale oak', color: '#dcc097' },
+  { label: 'Stone', color: '#b3aea4' },
+  { label: 'Painted white', color: '#efece4' },
+  { label: 'Painted black', color: '#4a4b52' },
+  { label: 'Red carpet', color: '#a8443a' },
+  { label: 'Blue carpet', color: '#4c6f9a' },
+  { label: 'Green carpet', color: '#4f7a4a' },
+];
 
 /**
  * The way up a flight of stairs, in the stairs' own squares before they're
@@ -93,7 +107,7 @@ function flightParts(footprint: { w: number; d: number }, shape: StairShape): Fu
       // A landing, or carrying on level with one.
       if (count > 0) stepIndex += count;
       const top = stepIndex * rise;
-      parts.push({ size: [0.98, top - 0.04, 0.98], at: [x, 0, z], color: WOOD }, { size: [1, 0.04, 1], at: [x, top - 0.04, z], color: TREAD });
+      parts.push({ size: [0.98, top - 0.04, 0.98], at: [x, 0, z], color: WOOD, follows: BODY_SHADE }, { size: [1, 0.04, 1], at: [x, top - 0.04, z], color: TREAD, follows: 1 });
       return;
     }
     for (let k = 0; k < count; k++) {
@@ -104,7 +118,7 @@ function flightParts(footprint: { w: number; d: number }, shape: StairShape): Fu
       const along: [number, number] = [x + outward[0] * offset, z + outward[1] * offset];
       const across = outward[0] === 0;
       const size = (height: number, thickness: number): [number, number, number] => (across ? [0.9, height, 1 / count + thickness] : [1 / count + thickness, height, 0.9]);
-      parts.push({ size: size(top - 0.04, 0), at: [along[0], 0, along[1]], color: WOOD }, { size: size(0.04, 0.02), at: [along[0], top - 0.04, along[1]], color: TREAD });
+      parts.push({ size: size(top - 0.04, 0), at: [along[0], 0, along[1]], color: WOOD, follows: BODY_SHADE }, { size: size(0.04, 0.02), at: [along[0], top - 0.04, along[1]], color: TREAD, follows: 1 });
     }
   });
   return parts;
@@ -175,7 +189,7 @@ function spiralParts(): FurniturePart[] {
     const angle = -((step + 0.5) / steps) * Math.PI * 2;
     const top = (step + 1) * rise;
     const reach = 0.52;
-    parts.push({ size: [0.42, 0.05, 0.9], at: [Math.sin(angle) * reach, top - 0.05, Math.cos(angle) * reach], turn: angle, color: TREAD });
+    parts.push({ size: [0.42, 0.05, 0.9], at: [Math.sin(angle) * reach, top - 0.05, Math.cos(angle) * reach], turn: angle, color: TREAD, follows: 1 });
     // A baluster at the outer end of each step.
     parts.push({ size: [0.03, 0.75, 0.03], at: [Math.sin(angle) * 0.92, top, Math.cos(angle) * 0.92], color: IRON });
   }
@@ -188,7 +202,7 @@ function ladderParts(): FurniturePart[] {
   for (let step = 0; step < count; step++) {
     const top = ((step + 1) / count) * RISE;
     const z = 0.5 - (step + 0.5) / count;
-    parts.push({ size: [0.7, 0.04, 0.22], at: [0, top - 0.04, z], color: TREAD });
+    parts.push({ size: [0.7, 0.04, 0.22], at: [0, top - 0.04, z], color: TREAD, follows: 1 });
   }
   // Steep sides the steps sit between, and a handrail up each.
   for (const x of [-0.38, 0.38]) {
