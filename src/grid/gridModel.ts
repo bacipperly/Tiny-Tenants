@@ -29,7 +29,7 @@ export interface ApertureObject {
 }
 
 /** What a floor tile is made of. Plain if it's never been set, as every tile was before there were surfaces. */
-export type FloorSurface = 'plain' | 'planks' | 'parquet' | 'tile' | 'checker' | 'stone' | 'carpet' | 'pavers';
+export type FloorSurface = 'plain' | 'planks' | 'parquet' | 'tile' | 'checker' | 'stone' | 'carpet' | 'pavers' | 'asphalt' | 'road-line' | 'road-double' | 'crosswalk';
 
 /** The railing drawn along a tile's open edges upstairs, or none. */
 export type TileRail = FenceStyle | 'none';

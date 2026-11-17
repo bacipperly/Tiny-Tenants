@@ -16,7 +16,22 @@ export interface SurfaceLook {
   color: string;
   /** How many squares one picture covers before it repeats. Plain has no picture. */
   cells: number;
+  /**
+   * A road marking: asphalt with paint on it, drawn in its own colors (so the
+   * paint keeps its color) one square at a time, and turned to suit the tiles
+   * round it. A yellow line runs on into the line tiles beside it; a
+   * crosswalk's stripes run across the row of crosswalk tiles, the way the
+   * traffic goes.
+   */
+  marking?: 'line' | 'crosswalk';
 }
+
+/** Asphalt's color, which road markings are drawn on as well. */
+const ASPHALT = '#3b3c40';
+/** Road paint: a slightly warm, slightly worn yellow. */
+const ROAD_YELLOW = '#f0c22e';
+/** Crosswalk paint: white, a touch off from the tile's own white so it reads as paint. */
+const CROSSWALK_WHITE = '#ecebe4';
 
 export const SURFACES: SurfaceLook[] = [
   { id: 'plain', label: 'Plain', emoji: '⬜', hint: 'A plain flat tile, the one every floor started with', color: '#e8d9b8', cells: 0 },
@@ -27,6 +42,34 @@ export const SURFACES: SurfaceLook[] = [
   { id: 'stone', label: 'Stone', emoji: '🪨', hint: 'Uneven flagstones', color: '#c2bdb2', cells: 2 },
   { id: 'carpet', label: 'Carpet', emoji: '🧶', hint: 'Soft carpet, faintly flecked', color: '#dccfb8', cells: 1 },
   { id: 'pavers', label: 'Pavers', emoji: '🧱', hint: 'Brick pavers in a basketweave, for patios and paths', color: '#cf7d5e', cells: 1 },
+  { id: 'asphalt', label: 'Asphalt', emoji: '⬛', hint: 'Black asphalt, for roads and driveways', color: ASPHALT, cells: 2 },
+  {
+    id: 'road-line',
+    label: 'Road line',
+    emoji: '🟨',
+    hint: 'Asphalt with a dashed yellow center line. Lay it in a row down the middle of a road: the line turns to run on into the line tiles beside it',
+    color: '#ffffff',
+    cells: 1,
+    marking: 'line',
+  },
+  {
+    id: 'road-double',
+    label: 'Double line',
+    emoji: '🛣️',
+    hint: 'Asphalt with a double solid yellow line, for no passing. Lay it in a row down the middle of a road: the lines turn to run on into the line tiles beside them',
+    color: '#ffffff',
+    cells: 1,
+    marking: 'line',
+  },
+  {
+    id: 'crosswalk',
+    label: 'Crosswalk',
+    emoji: '🦓',
+    hint: 'Asphalt with white zebra stripes. Lay it in a row across a road: the stripes run the way the traffic does',
+    color: '#ffffff',
+    cells: 1,
+    marking: 'crosswalk',
+  },
 ];
 
 export function surfaceLook(surface: FloorSurface): SurfaceLook {
@@ -179,6 +222,26 @@ const DRAW: Partial<Record<FloorSurface, Draw>> = {
     }
     ctx.putImageData(image, 0, 0);
   },
+  asphalt: (ctx, size, random) => drawAsphalt(ctx, size, random),
+  'road-line': (ctx, size, random) => {
+    drawMarkingGround(ctx, size, random);
+    // One dash, half a square long, in the middle: tile after tile, dash and gap alternate.
+    const width = size * 0.055;
+    paintStripe(ctx, size / 2 - width / 2, size * 0.25, width, size * 0.5, random);
+  },
+  'road-double': (ctx, size, random) => {
+    drawMarkingGround(ctx, size, random);
+    const width = size * 0.04;
+    const apart = size * 0.05;
+    paintStripe(ctx, size / 2 - apart / 2 - width, 0, width, size, random);
+    paintStripe(ctx, size / 2 + apart / 2, 0, width, size, random);
+  },
+  crosswalk: (ctx, size, random) => {
+    drawMarkingGround(ctx, size, random);
+    // Two broad bars a square, as wide as the gaps between them, so a row of crosswalk tiles stripes evenly all the way across.
+    const bar = size / 4;
+    for (const x of [bar / 2, bar * 2.5]) paintStripe(ctx, x, size * 0.07, bar, size * 0.86, random, CROSSWALK_WHITE);
+  },
   pavers: (ctx, size, random) => {
     const square = size / 2;
     for (let x = 0; x < 2; x++) {
@@ -194,6 +257,54 @@ const DRAW: Partial<Record<FloorSurface, Draw>> = {
     }
   },
 };
+
+/** Asphalt, pale, for tinting: a fine mix of stones in the tar, and a few smoother, darker patches where it's worn. */
+function drawAsphalt(ctx: CanvasRenderingContext2D, size: number, random: () => number) {
+  ctx.fillStyle = gray(0.84);
+  ctx.fillRect(0, 0, size, size);
+  for (let patch = 0; patch < 10; patch++) {
+    const x = random() * size;
+    const y = random() * size;
+    const radius = 30 + random() * 60;
+    for (const dx of [-size, 0, size]) {
+      for (const dy of [-size, 0, size]) {
+        const glow = ctx.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, radius);
+        glow.addColorStop(0, gray(0.7, 0.25));
+        glow.addColorStop(1, gray(0.7, 0));
+        ctx.fillStyle = glow;
+        ctx.fillRect(x + dx - radius, y + dy - radius, radius * 2, radius * 2);
+      }
+    }
+  }
+  // Stones: specks lighter and darker than the tar.
+  const stones = Math.round((size * size) / 22);
+  for (let stone = 0; stone < stones; stone++) {
+    const light = random() < 0.55;
+    ctx.fillStyle = gray(light ? 1 : 0.55, 0.25 + random() * 0.35);
+    const across = random() < 0.85 ? 1.5 : 2.5;
+    ctx.fillRect(random() * size, random() * size, across, across);
+  }
+}
+
+/** Under a road marking: the asphalt itself, already in asphalt's color, since a marking isn't tinted. */
+function drawMarkingGround(ctx: CanvasRenderingContext2D, size: number, random: () => number) {
+  drawAsphalt(ctx, size, random);
+  ctx.globalCompositeOperation = 'multiply';
+  ctx.fillStyle = ASPHALT;
+  ctx.fillRect(0, 0, size, size);
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+/** A stripe of road paint, yellow unless said otherwise, running up the picture, worn through in specks where the asphalt shows. */
+function paintStripe(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, random: () => number, color = ROAD_YELLOW) {
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, width, height);
+  const worn = Math.round((width * height) / 30);
+  for (let speck = 0; speck < worn; speck++) {
+    ctx.fillStyle = random() < 0.6 ? 'rgba(60, 60, 64, 0.55)' : 'rgba(255, 240, 190, 0.35)';
+    ctx.fillRect(x + random() * width, y + random() * height, 1.5, 1.5);
+  }
+}
 
 function mod(value: number, size: number): number {
   return ((value % size) + size) % size;
