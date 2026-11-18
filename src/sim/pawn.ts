@@ -13,6 +13,8 @@ import { heightAlong } from '../build/stairs';
 import { placeKey } from './world';
 import type { LevelPiece, World } from './world';
 import { Bubble } from './bubble';
+import { PawnBody } from './pawnBody';
+import type { BodyPose, Expression } from './pawnBody';
 import type { Advertisement } from './needs';
 import { Plate } from './plate';
 import { Mind } from './mind';
@@ -29,12 +31,7 @@ const STROLL_SPEED = 1.5;
 const TURN_SPEED = 12;
 /** Looking around or turning to someone, with no walk to get on with. */
 const IDLE_TURN_SPEED = 3.5;
-const BREATH_SPEED = 2.2;
-const BREATH_AMOUNT = 0.025;
 /** The slow side-to-side lean of someone shifting their weight, in radians. Two speeds, so it doesn't look like a metronome. */
-const SWAY_AMOUNT = 0.03;
-const SWAY_SPEED = 0.8;
-const SWAY_SECOND_SPEED = 1.9;
 const SIDESTEP_SPEED = 16;
 const POSE_SPEED = 8;
 
@@ -67,13 +64,6 @@ const STAND_LEAN = 0.14;
 const BUBBLE_ABOVE_HEAD = 0.42;
 const BODY_RADIUS = 0.2;
 const BODY_HEIGHT = 0.9;
-const EYE_COLOR = 0x2b2b2b;
-/** How hard a bump squashes it, how fast that wobbles and how quickly it settles. */
-const THUMP_SQUASH = 0.22;
-const WOBBLE_SPEED = 22;
-const WOBBLE_SETTLE = 5;
-/** How far a shove rocks it side to side, in radians. */
-const STAGGER_ROCK = 0.25;
 /** How fast a thrown pawn turns head over heels, in radians a second. */
 const TUMBLE_SPEED = 9;
 /** How see-through the outline of a pawn hidden behind a wall is. */
@@ -247,6 +237,8 @@ export class Pawn {
   private figure = new THREE.Group();
   /** The tube and eyes, inside the figure, so they can turn, sit and lie down while the shadow and ring stay flat on the floor. */
   private torso = new THREE.Group();
+  /** Inside the torso, between it and the gesture rig. */
+  private walkRig = new THREE.Group();
   /** An outline of the pawn drawn over everything, shown when it's behind a wall, so it can still be seen. */
   private silhouette!: THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
   /** Inside the torso, so a hop or a spin plays on top of whatever pose it's in and always comes back to it. */
@@ -276,10 +268,13 @@ export class Pawn {
   private swingOffset = new THREE.Vector3();
   private swingAmount = 0;
   private bodyMaterial = new THREE.MeshStandardMaterial();
-  private tube!: THREE.Mesh;
-  private eyes: THREE.Mesh[] = [];
-  /** A bump it's still wobbling from, like landing after a toss: how squashed and how rocked, both dying away. */
-  private wobble = { squash: 0, rock: 0, clock: 0 };
+  /** The gummy body itself: the bean, its arms and legs and face, all on springs. */
+  private shape!: PawnBody;
+  /** How it was moving last frame, across the ground, for how much it lurches and leans. */
+  private lastVelocity = new THREE.Vector2();
+  private acceleration = new THREE.Vector2();
+  /** A face pulled for a moment, like a laugh or a scowl, over its mood. */
+  private reaction: { expression: Expression; secondsLeft: number } | null = null;
   /** How shut its eyes are, from 0 (wide open) to 1 (asleep). */
   private eyesShut = 0;
   private selectionRing!: THREE.Mesh;
@@ -304,7 +299,8 @@ export class Pawn {
     this.mind = new Mind(info);
     this.traffic = traffic;
     this.torso.rotation.order = 'YXZ';
-    this.torso.add(this.gestureRig);
+    this.torso.add(this.walkRig);
+    this.walkRig.add(this.gestureRig);
     this.figure.add(this.torso);
     this.body.add(this.figure);
     this.buildBody();
@@ -693,7 +689,7 @@ export class Pawn {
 
   /** The solid part of the pawn, for checking whether a click landed on it. */
   get clickTarget(): THREE.Object3D {
-    return this.tube;
+    return this.shape.bean;
   }
 
   /** Call whenever the house changes, in case that blocked the route or dropped furniture on the pawn. */
@@ -723,6 +719,7 @@ export class Pawn {
   }
 
   update(seconds: number) {
+    const before = this.body.position.clone();
     // Slower on the stairs, a hop at a time.
     const onStairs = this.world.stairStep(this.currentCell()) !== undefined;
     if (this.script) this.updateScript(seconds);
@@ -737,6 +734,7 @@ export class Pawn {
     this.updateIdleMotion(seconds);
     this.updateGesture(seconds);
     this.updateEyes(seconds);
+    this.updateBody(seconds, before);
     this.plate?.setBrightness(this.world.lightAt(here));
     this.bodyMaterial.color.set(this.info.color).multiplyScalar(this.world.lightAt(here));
     this.silhouette.material.color.set(this.info.color);
@@ -982,34 +980,84 @@ export class Pawn {
     this.torso.rotation.y = this.facing;
   }
 
-  /** Breathing and shifting weight, always going, so nobody ever stands completely still. Someone lying down only breathes. A bump, like landing after a toss, wobbles on top and settles. */
+  /** Keeps the clock its little motions run on. The breathing, swaying and waddling are the body's own, on its springs. */
   private updateIdleMotion(seconds: number) {
     this.idleClock += seconds;
-    const wobble = this.wobble;
-    wobble.clock += seconds;
-    wobble.squash *= Math.exp(-WOBBLE_SETTLE * seconds);
-    wobble.rock *= Math.exp(-WOBBLE_SETTLE * 0.8 * seconds);
-    const squash = wobble.squash * Math.cos(wobble.clock * WOBBLE_SPEED);
-    const breath = Math.sin(this.idleClock * BREATH_SPEED) * BREATH_AMOUNT;
-    this.torso.scale.set(1 - breath / 2 + squash / 2, 1 + breath - squash, 1 - breath / 2 + squash / 2);
-    const sway = Math.sin(this.idleClock * SWAY_SPEED) + Math.sin(this.idleClock * SWAY_SECOND_SPEED) / 2;
-    const rock = wobble.rock * Math.sin(wobble.clock * WOBBLE_SPEED * 0.6);
-    this.torso.rotation.z = this.poseTarget.tilt < 0 ? 0 : sway * SWAY_AMOUNT + rock;
   }
 
-  /** Pulls a face for a moment. A tenant's face is just its eyes, so there's nothing to show. */
-  react(_expression: 'smile' | 'grin' | 'frown' | 'oh' | 'blush', _seconds: number) {}
+  /**
+   * Tells the gummy body what the pawn's up to, so it can move to suit:
+   * waddling at the pace it's going, lurching as it sets off and wobbling as
+   * it stops, sitting, lying, swimming or flailing, its arms in whatever it's
+   * doing, and its face showing how it feels.
+   */
+  private updateBody(seconds: number, before: THREE.Vector3) {
+    if (seconds <= 0) return;
+    const velocity = new THREE.Vector2(this.body.position.x - before.x, this.body.position.z - before.z).divideScalar(seconds);
+    const change = velocity.clone().sub(this.lastVelocity).divideScalar(seconds);
+    // Smoothed, since a frame's speed jumps about.
+    this.acceleration.lerp(change, Math.min(1, 12 * seconds));
+    this.lastVelocity.copy(velocity);
+    const forward = new THREE.Vector2(Math.sin(this.facing), Math.cos(this.facing));
+    const right = new THREE.Vector2(forward.y, -forward.x);
+    if (this.reaction && (this.reaction.secondsLeft -= seconds) <= 0) this.reaction = null;
+    this.shape.update(seconds, {
+      speed: velocity.length(),
+      forwardAccel: this.acceleration.dot(forward),
+      sideAccel: this.acceleration.dot(right),
+      pose: this.bodyPose,
+      activity: this.activity,
+      gesture: this.gesture,
+      gestureProgress: Math.min(1, this.gestureAge / GESTURE_SECONDS),
+      eating: this.isEating,
+      holding: this.heldItem !== null || (this.plate !== null && !this.isEating && this.isWalking),
+      eyesShut: this.eyesShut,
+      expression: this.reaction?.expression ?? this.expression,
+    });
+  }
 
-  /** Rocks on its feet, like being shoved. */
+  /** How it's holding itself, for its arms and legs. */
+  private get bodyPose(): BodyPose {
+    const scripted = this.scriptPose as ScriptPose | null;
+    if (scripted) return scripted;
+    const spot = this.furnitureSpot;
+    if (spot && this.furnitureStage === 'using') {
+      if (spot.chair || spot.kind === 'sit') return 'sit';
+      if (spot.kind === 'lie') return 'lie';
+    }
+    return 'stand';
+  }
+
+  /** The face its mood puts on. */
+  private get expression(): Expression {
+    switch (this.mind.buffId) {
+      case 'giddy':
+        return 'grin';
+      case 'happy':
+        return 'smile';
+      case 'sad':
+      case 'cranky':
+        return 'frown';
+      case 'embarrassed':
+        return 'blush';
+    }
+    const { label } = this.mind.mood;
+    return label === 'Uncomfortable' || label === 'Grossed Out' ? 'frown' : 'smile';
+  }
+
+  /** Pulls a face for a moment: a grin at a joke, a scowl, a gasp. */
+  react(expression: Expression, seconds: number) {
+    this.reaction = { expression, secondsLeft: seconds };
+  }
+
+  /** Staggers, arms flailing, like being shoved. */
   stagger() {
-    this.wobble.rock = STAGGER_ROCK;
-    this.wobble.clock = 0;
+    this.shape.stagger();
   }
 
-  /** A jolt right through it, like hitting the floor after being thrown: a squash that wobbles out. */
+  /** A jolt right through it, like hitting the floor after being thrown. */
   thump(strength = 1) {
-    this.wobble.squash = THUMP_SQUASH * strength;
-    this.wobble.clock = 0;
+    this.shape.thump(strength);
   }
 
   /** The pose of the step a scripted move is on, like swimming or treading water. */
@@ -1024,7 +1072,7 @@ export class Pawn {
 
   /** Where its middle is, in the world, for telling whether a wall stands between it and the camera. */
   middlePosition(): THREE.Vector3 {
-    return this.tube.localToWorld(new THREE.Vector3(0, 0, 0));
+    return this.shape.bean.localToWorld(new THREE.Vector3(0, 0.39, 0));
   }
 
   /** Lying down on something it sleeps on, like a bed, as opposed to having a soak in the bath. */
@@ -1037,9 +1085,6 @@ export class Pawn {
   private updateEyes(seconds: number) {
     const target = this.isAsleep ? 1 : 0;
     this.eyesShut += (target - this.eyesShut) * Math.min(1, EYE_CLOSE_SPEED * seconds);
-    const shut = this.eyesShut;
-    // Flattened to a thin line, and a touch wider, like eyes closed in contentment.
-    for (const eye of this.eyes) eye.scale.set(1 + 0.5 * shut, 1 - 0.85 * shut, 1 - 0.3 * shut);
   }
 
   /** What it's doing at the piece it's standing at, if that piece gives it something to do. */
@@ -1075,7 +1120,7 @@ export class Pawn {
     const swell = Math.sin(progress * Math.PI);
     if (this.gesture === 'hop') rig.position.y = Math.abs(Math.sin(progress * Math.PI * 3)) * 0.25 * swell;
     if (this.gesture === 'spin') rig.rotation.y = progress * Math.PI * 2;
-    if (this.gesture === 'wiggle' || this.gesture === 'wave') rig.rotation.z = Math.sin(progress * Math.PI * 6) * 0.2 * swell;
+    if (this.gesture === 'wiggle') rig.rotation.z = Math.sin(progress * Math.PI * 6) * 0.2 * swell;
     if (this.gesture === 'bow') rig.rotation.x = swell * 0.4;
     if (this.gesture === 'slump') {
       rig.rotation.x = swell * 0.15;
@@ -1183,9 +1228,10 @@ export class Pawn {
   }
 
   private buildBody() {
-    const tube = new THREE.Mesh(new THREE.CapsuleGeometry(BODY_RADIUS, BODY_HEIGHT - BODY_RADIUS * 2, 8, 24), this.bodyMaterial);
-    tube.position.y = BODY_HEIGHT / 2;
-    this.tube = tube;
+    // A little gloss, like a gummy sweet.
+    this.bodyMaterial.roughness = 0.42;
+    this.shape = new PawnBody(this.bodyMaterial);
+    this.gestureRig.add(this.shape.group);
 
     // Depth-tested, so the pawn stands on it rather than the ring showing through its body.
     // High enough to clear a rug, which is the tallest thing lying on the floor.
@@ -1201,25 +1247,15 @@ export class Pawn {
     this.bubble.group.position.y = BODY_HEIGHT + BUBBLE_ABOVE_HEAD;
     this.figure.add(this.bubble.group);
 
-    const eyeGeometry = new THREE.SphereGeometry(0.024, 12, 8);
-    const eyeMaterial = new THREE.MeshStandardMaterial({ color: EYE_COLOR });
-    for (const side of [-1, 1]) {
-      const eye = new THREE.Mesh(eyeGeometry, eyeMaterial);
-      eye.position.set(side * 0.07, 0.68, BODY_RADIUS * 0.94);
-      this.gestureRig.add(eye);
-      this.eyes.push(eye);
-    }
-    this.gestureRig.add(tube);
-
-    // Its outline for when it's behind a wall: the tube, flat and see-through, drawn over everything.
-    // It rides on the tube, so it leans and bobs along with it.
+    // Its outline for when it's behind a wall: the bean, flat and see-through, drawn over everything.
+    // It rides on the bean, so it leans, squashes and wobbles along with it.
     this.silhouette = new THREE.Mesh(
-      tube.geometry,
+      this.shape.bean.geometry,
       new THREE.MeshBasicMaterial({ color: this.info.color, transparent: true, opacity: SILHOUETTE_OPACITY, depthTest: false, depthWrite: false }),
     );
     this.silhouette.renderOrder = 15;
     this.silhouette.visible = false;
-    tube.add(this.silhouette);
+    this.shape.bean.add(this.silhouette);
 
     SHADOW_LAYERS.forEach(({ radius, opacity }, layer) => {
       const shadow = new THREE.Mesh(
